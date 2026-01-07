@@ -1,4 +1,4 @@
-# Disguised AI 🥸
+# Veil 🥷💨
 
 Privacy-preserving proxy for LLMs. Anonymize sensitive data before sending to AI, get it back in responses.
 
