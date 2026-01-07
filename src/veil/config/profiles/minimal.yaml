@@ -1,0 +1,59 @@
+# Minimal Detection Profile
+# Only anonymize high-confidence PII
+# Use when you need maximum utility and only want to redact obvious PII
+
+name: minimal
+description: Minimal detection - only high-confidence PII
+
+# Higher threshold = fewer entities anonymized
+threshold: 0.8
+
+# Lower rarity factor = term frequency less important
+rarity_factor: 0.05
+
+context_window: 50
+
+# Reduced entity weights - only critical PII stays high
+entity_weights:
+  # Critical PII - keep high
+  SSN: 1.0
+  CREDIT_CARD: 1.0
+  PASSPORT: 0.95
+  DRIVER_LICENSE: 0.95
+  BANK_ACCOUNT: 0.95
+  IBAN: 0.95
+  MEDICAL_RECORD: 1.0
+
+  # Personal identifiers - moderate
+  PERSON: 0.75
+  EMAIL: 0.85
+  PHONE: 0.70
+
+  # Organizations and locations - reduced
+  ORG: 0.50
+  GPE: 0.35
+  LOC: 0.30
+  FAC: 0.30
+
+  # Medical - keep high
+  HEALTH_PLAN: 0.90
+
+  # Financial - reduced
+  MONEY: 0.40
+
+  # Temporal - low
+  DATE: 0.30
+  TIME: 0.20
+
+  # Other - reduced
+  IP_ADDRESS: 0.60
+  URL: 0.40
+  PRODUCT: 0.25
+  EVENT: 0.20
+
+pos_multipliers:
+  PROPN: 1.1
+  NOUN: 1.0
+  NUM: 0.7
+  ADJ: 0.5
+  VERB: 0.2

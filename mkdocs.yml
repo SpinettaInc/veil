@@ -1,0 +1,92 @@
+site_name: Veil Documentation
+site_description: Privacy-preserving proxy for Large Language Models
+site_author: Veil Contributors
+repo_url: https://github.com/yourusername/veil
+repo_name: veil
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+      - Configuration: getting-started/configuration.md
+  - User Guide:
+      - CLI Reference: guide/cli.md
+      - Python API: guide/python-api.md
+      - Desktop App: guide/desktop-app.md
+      - Detection Profiles: guide/profiles.md
+      - Replacement Modes: guide/replacement-modes.md
+  - Integrations:
+      - LLM Providers: integrations/llm-providers.md
+      - Guardrails AI: integrations/guardrails.md
+  - API Reference:
+      - Pipeline: api/pipeline.md
+      - Detection: api/detection.md
+      - Replacement: api/replacement.md
+      - LLM Proxy: api/llm-proxy.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Architecture: development/architecture.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yourusername/veil

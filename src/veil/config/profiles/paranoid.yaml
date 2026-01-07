@@ -1,0 +1,59 @@
+# Paranoid Detection Profile
+# Maximum privacy protection - may over-detect
+# Use for highly sensitive documents (legal, medical, financial)
+
+name: paranoid
+description: Maximum protection - aggressive detection
+
+# Lower threshold = more entities anonymized
+threshold: 0.3
+
+# Higher rarity factor = rare terms weighted more heavily
+rarity_factor: 0.15
+
+context_window: 150
+
+# Boosted entity weights
+entity_weights:
+  # All PII types at maximum
+  PERSON: 1.0
+  SSN: 1.0
+  CREDIT_CARD: 1.0
+  EMAIL: 1.0
+  PHONE: 0.95
+  PASSPORT: 1.0
+  DRIVER_LICENSE: 1.0
+
+  # Organizations and locations - higher
+  ORG: 0.95
+  GPE: 0.85
+  LOC: 0.80
+  FAC: 0.80
+
+  # Medical - maximum
+  MEDICAL_RECORD: 1.0
+  HEALTH_PLAN: 1.0
+  DEVICE_ID: 1.0
+
+  # Financial - maximum
+  MONEY: 0.80
+  BANK_ACCOUNT: 1.0
+  IBAN: 1.0
+
+  # Temporal - higher
+  DATE: 0.75
+  TIME: 0.55
+
+  # Other - higher
+  IP_ADDRESS: 0.90
+  URL: 0.85
+  PRODUCT: 0.65
+  EVENT: 0.60
+  NORP: 0.70
+
+pos_multipliers:
+  PROPN: 1.3
+  NOUN: 1.1
+  NUM: 0.9
+  ADJ: 0.7
+  VERB: 0.4

@@ -1,0 +1,59 @@
+# Balanced Detection Profile
+# Good tradeoff between privacy protection and utility
+# Default profile for most use cases
+
+name: balanced
+description: Balanced privacy/utility tradeoff (recommended)
+
+# Score threshold - entities above this score will be anonymized
+threshold: 0.5
+
+# How much term rarity affects the score (0.0 to 1.0)
+rarity_factor: 0.1
+
+# Context window size in characters
+context_window: 100
+
+# Entity type weights (0.0 to 1.0)
+# Higher = more likely to be anonymized
+entity_weights:
+  # High priority PII
+  PERSON: 0.95
+  SSN: 1.0
+  CREDIT_CARD: 1.0
+  EMAIL: 0.90
+  PHONE: 0.85
+  PASSPORT: 0.95
+  DRIVER_LICENSE: 0.95
+
+  # Organizations and locations
+  ORG: 0.85
+  GPE: 0.75
+  LOC: 0.70
+
+  # Medical
+  MEDICAL_RECORD: 1.0
+  HEALTH_PLAN: 0.95
+
+  # Financial
+  MONEY: 0.65
+  BANK_ACCOUNT: 0.95
+  IBAN: 0.95
+
+  # Temporal
+  DATE: 0.60
+  TIME: 0.40
+
+  # Other
+  IP_ADDRESS: 0.80
+  URL: 0.70
+  PRODUCT: 0.50
+  EVENT: 0.45
+
+# POS tag multipliers
+pos_multipliers:
+  PROPN: 1.2
+  NOUN: 1.0
+  NUM: 0.8
+  ADJ: 0.6
+  VERB: 0.3
