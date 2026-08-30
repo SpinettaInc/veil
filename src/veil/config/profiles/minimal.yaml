@@ -1,59 +1,114 @@
-# Minimal Detection Profile
-# Only anonymize high-confidence PII
-# Use when you need maximum utility and only want to redact obvious PII
-
+# Minimal detection profile.
+# Source of truth for this profile; loaded by veil.weighting.config.
+# Regenerate from the Python defaults with: python -m veil.weighting.config
+# Entity types must be EntityType names; custom_patterns entries take
+# name, regex, entity_type, confidence, context (list), requires_context.
 name: minimal
-description: Minimal detection - only high-confidence PII
-
-# Higher threshold = fewer entities anonymized
 threshold: 0.8
-
-# Lower rarity factor = term frequency less important
 rarity_factor: 0.05
-
-context_window: 50
-
-# Reduced entity weights - only critical PII stays high
+context_window: 100
 entity_weights:
-  # Critical PII - keep high
+  PERSON: 0.95
+  ORG: 0.85
+  GPE: 0.375
+  LOC: 0.35
+  FAC: 0.35
   SSN: 1.0
   CREDIT_CARD: 1.0
+  EMAIL: 0.9
+  PHONE: 0.85
+  IP_ADDRESS: 0.8
   PASSPORT: 0.95
   DRIVER_LICENSE: 0.95
   BANK_ACCOUNT: 0.95
   IBAN: 0.95
   MEDICAL_RECORD: 1.0
-
-  # Personal identifiers - moderate
-  PERSON: 0.75
-  EMAIL: 0.85
-  PHONE: 0.70
-
-  # Organizations and locations - reduced
-  ORG: 0.50
-  GPE: 0.35
-  LOC: 0.30
-  FAC: 0.30
-
-  # Medical - keep high
-  HEALTH_PLAN: 0.90
-
-  # Financial - reduced
-  MONEY: 0.40
-
-  # Temporal - low
-  DATE: 0.30
-  TIME: 0.20
-
-  # Other - reduced
-  IP_ADDRESS: 0.60
-  URL: 0.40
-  PRODUCT: 0.25
-  EVENT: 0.20
-
+  HEALTH_PLAN: 0.95
+  DEVICE_ID: 0.9
+  DATE: 0.3
+  TIME: 0.15
+  MONEY: 0.15
+  PERCENT: 0.075
+  CARDINAL: 0.075
+  ORDINAL: 0.05
+  QUANTITY: 0.2
+  PRODUCT: 0.175
+  EVENT: 0.175
+  WORK_OF_ART: 0.175
+  NORP: 0.45
+  LANGUAGE: 0.3
+  LAW: 0.3
+  URL: 0.7
+  LICENSE_PLATE: 0.85
+  CUSTOM: 0.5
+  UNKNOWN: 0.3
 pos_multipliers:
-  PROPN: 1.1
+  PROPN: 1.2
   NOUN: 1.0
-  NUM: 0.7
-  ADJ: 0.5
-  VERB: 0.2
+  NUM: 0.8
+  ADJ: 0.6
+  VERB: 0.3
+  ADV: 0.3
+  ADP: 0.1
+  AUX: 0.1
+  CCONJ: 0.1
+  DET: 0.1
+  PART: 0.1
+  PRON: 0.2
+  SCONJ: 0.1
+  PUNCT: 0.0
+  SYM: 0.2
+  X: 0.3
+context_patterns:
+- pattern: \b(?:CEO|CTO|CFO|COO|President|Chairman)\s+(?:of\s+)?
+  boost: 0.15
+  description: Executive role context
+- pattern: \b(?:founder|director|manager|executive)\s+(?:of\s+)?
+  boost: 0.1
+  description: Leadership role context
+- pattern: \bpatient\s+(?:named?|called|is|was)?\s*
+  boost: 0.2
+  description: Patient reference
+- pattern: \bdiagnos(?:ed|is)\s+(?:with\s+)?
+  boost: 0.2
+  description: Diagnosis context
+- pattern: \bmedical\s+record
+  boost: 0.15
+  description: Medical record context
+- pattern: \bhealth\s+(?:insurance|plan|condition)
+  boost: 0.15
+  description: Health-related context
+- pattern: \baccount\s*(?:number|#|no\.?)?
+  boost: 0.2
+  description: Account number context
+- pattern: \bsocial\s*security
+  boost: 0.25
+  description: Social security context
+- pattern: \b(?:credit|debit)\s*card
+  boost: 0.15
+  description: Credit card context
+- pattern: \bbank\s+(?:account|routing)
+  boost: 0.2
+  description: Bank account context
+- pattern: \bborn\s+(?:on|in)\s*
+  boost: 0.15
+  description: Birth date context
+- pattern: \blives?\s+(?:at|in)\s*
+  boost: 0.15
+  description: Address context
+- pattern: \bworks?\s+(?:at|for)\s*
+  boost: 0.1
+  description: Employment context
+- pattern: \bcontact\s+(?:at|via|:)?\s*
+  boost: 0.1
+  description: Contact info context
+- pattern: \bpassport\s*(?:number|#|no\.?)?
+  boost: 0.2
+  description: Passport context
+- pattern: \b(?:driver'?s?\s*)?licen[cs]e\s*(?:number|#|no\.?)?
+  boost: 0.2
+  description: License context
+- pattern: \b(?:my|his|her|their)\s+(?:name|email|phone|address|ssn)
+  boost: 0.15
+  description: Possessive personal info
+custom_patterns: []

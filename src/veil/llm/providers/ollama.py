@@ -1,10 +1,11 @@
 """Ollama LLM provider for local models."""
 
 import json
-from typing import Generator, List, Optional
+from collections.abc import Generator
+from typing import Any
 
 try:
-    import requests
+    import requests  # type: ignore[import-untyped]
 
     REQUESTS_AVAILABLE = True
 except ImportError:
@@ -72,7 +73,7 @@ class OllamaProvider(LLMProvider):
         return "Ollama"
 
     @property
-    def available_models(self) -> List[str]:
+    def available_models(self) -> list[str]:
         """Get list of available models.
 
         Attempts to fetch from Ollama API, falls back to defaults.
@@ -92,8 +93,8 @@ class OllamaProvider(LLMProvider):
 
     def chat(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> LLMResponse:
         """Send a chat request to Ollama.
 
@@ -108,7 +109,7 @@ class OllamaProvider(LLMProvider):
         api_messages = [m.to_dict() for m in messages]
 
         # Build request
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": api_messages,
             "stream": False,
@@ -135,7 +136,7 @@ class OllamaProvider(LLMProvider):
         # Extract response
         content = data.get("message", {}).get("content", "")
 
-        usage = {}
+        usage: dict[str, int] = {}
         if "eval_count" in data:
             usage["completion_tokens"] = data["eval_count"]
         if "prompt_eval_count" in data:
@@ -154,8 +155,8 @@ class OllamaProvider(LLMProvider):
 
     def chat_stream(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> Generator[str, None, None]:
         """Stream a chat response from Ollama.
 
@@ -168,7 +169,7 @@ class OllamaProvider(LLMProvider):
         """
         api_messages = [m.to_dict() for m in messages]
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": api_messages,
             "stream": True,
@@ -211,7 +212,7 @@ class OllamaProvider(LLMProvider):
                 f"{self.base_url}/api/tags",
                 timeout=5,
             )
-            return response.status_code == 200
+            return bool(response.status_code == 200)
         except Exception:
             return False
 
@@ -219,6 +220,6 @@ class OllamaProvider(LLMProvider):
         """Check if Ollama is running."""
         try:
             response = requests.get(f"{self.base_url}/api/tags", timeout=2)
-            return response.status_code == 200
+            return bool(response.status_code == 200)
         except Exception:
             return False

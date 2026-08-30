@@ -89,20 +89,20 @@ class TokenReplacer:
         Returns:
             Token replacement string (e.g., "[PERSON_1]")
         """
-        # Check if we already have a mapping for this text
-        existing = mapping_store.get_replacement(entity.text)
+        # Check if we already have a mapping for this text (or a partial form)
+        existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
         if existing:
             return existing
 
-        # Generate new token
-        token = self._format_token(entity.entity_type, mapping_store)
-
-        return token
+        # Generate new token (custom patterns carry their own label)
+        label = entity.metadata.get("label") if entity.metadata else None
+        return self._format_token(entity.entity_type, mapping_store, label)
 
     def _format_token(
         self,
         entity_type: EntityType,
         mapping_store: MappingStore,
+        label: str | None = None,
     ) -> str:
         """Format a token for an entity type.
 
@@ -113,10 +113,15 @@ class TokenReplacer:
         Returns:
             Formatted token string
         """
-        number = mapping_store.next_token_number(entity_type)
+        number = mapping_store.next_token_number(entity_type, label)
+        # Skip numbers whose token is already in use or occurs in the input
+        while mapping_store.is_blocked(self._render(entity_type, number, label)):
+            number += 1
+        return self._render(entity_type, number, label)
 
+    def _render(self, entity_type: EntityType, number: int, label: str | None = None) -> str:
         if self.include_type:
-            type_name = entity_type.value
+            type_name = label or entity_type.value
             if self.uppercase:
                 type_name = type_name.upper()
             token_content = f"{type_name}_{number}"

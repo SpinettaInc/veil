@@ -2,13 +2,11 @@
 
 import pytest
 
-from veil.detection.entity import Entity, EntityType
-from veil.detection.ner import SpacyNER, SPACY_AVAILABLE
-from veil.detection.patterns import PatternDetector
-from veil.detection.presidio import PresidioDetector, PRESIDIO_AVAILABLE
-from veil.detection.hybrid import HybridDetector, DetectorConfig, DetectorType
-from veil.core.detector import EntityDetector, DetectionMode
-
+from veil.core.detector import DetectionMode, EntityDetector
+from veil.detection.entity import EntityType
+from veil.detection.hybrid import DetectorConfig, HybridDetector
+from veil.detection.ner import SPACY_AVAILABLE, SpacyNER
+from veil.detection.presidio import PRESIDIO_AVAILABLE, PresidioDetector
 
 # Test data
 SAMPLE_TEXT = """

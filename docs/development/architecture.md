@@ -96,10 +96,31 @@ class HybridDetector:
 
     def detect(self, text):
         # Collect from all sources
-        # Merge overlapping entities
         # Apply agreement boosting
+        # Merge overlapping entities
         # Return deduplicated list
 ```
+
+The full spaCy pipeline is loaded once and shared with Presidio, which needs
+lemmas for its context scoring; NER itself runs with only `tok2vec` + `ner`.
+
+#### Overlap resolution
+
+`merge_overlapping_entities` (`detection/entity.py`) picks one entity per
+span by **type specificity first** — structured PII (SSN, CREDIT_CARD, EMAIL,
+PHONE, IP, IBAN, ...) beats named entities (PERSON, ORG, GPE, ...), which beat
+generic NER labels (CARDINAL, DATE, MONEY, ...) — then confidence, then span
+length. Without this, spaCy calling a card number a `CARDINAL` at 0.9 would
+override the Luhn-validated `CREDIT_CARD` at 0.8. The same ranking selects
+the winner inside a hybrid agreement group.
+
+Loose regexes (any 8+ digits as a bank account, any 5 digits as a ZIP, the
+generic phone shape) are `requires_context=True`: they are dropped unless a
+cue word ("account", "zip", "phone") appears within the context window.
+NER output additionally passes through `is_false_positive()` (`ner.py`), which
+removes relative dates and durations, field labels, version strings, fiscal
+quarters, numbered roads, and similar non-identifying spans. The Presidio
+wrapper applies the same filter to Presidio's spaCy-derived spans.
 
 ### Scoring Layer
 
@@ -108,14 +129,20 @@ class HybridDetector:
 Calculates privacy scores for entities.
 
 ```
-Score = BaseScore + ContextBoost + RarityBoost
+Score = BaseScore × ConfidenceFactor + ContextBoost + RarityBoost + RelationshipBoost
 ```
 
 Components:
 
 1. **BaseScore**: From profile configuration per entity type
-2. **ContextBoost**: Added when sensitive keywords detected
-3. **RarityBoost**: Added for unique/rare values (TF-IDF)
+2. **ConfidenceFactor**: `min(1, detector confidence + 0.15)` — a weak,
+   context-less regex hit does not inherit the full type weight
+3. **ContextBoost**: Added when sensitive keywords are detected nearby (not
+   applied to bare numbers: CARDINAL, ORDINAL, QUANTITY, PERCENT)
+4. **RarityBoost**: Document hapax scoring, blended with corpus frequency
+   when `wordfreq` is installed
+5. **RelationshipBoost**: "CEO of", "lives at" links between adjacent entities;
+   computed once per document (`RelationshipAnalyzer.boosts_by_entity`)
 
 #### ContextAnalyzer
 

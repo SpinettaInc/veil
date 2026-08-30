@@ -220,6 +220,7 @@ class TestPatternDetector:
     def test_add_custom_pattern(self, detector):
         """Test adding a custom pattern."""
         import re
+
         from veil.detection.patterns import Pattern
 
         custom_pattern = Pattern(

@@ -1,11 +1,12 @@
 """Tests for Veil desktop app components."""
 
-import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
+
+pytestmark = pytest.mark.desktop
 
 
 class TestSettings:
@@ -205,7 +206,7 @@ class TestVeilProxy:
 
     def test_proxy_initialization(self):
         """Test proxy initializes correctly."""
-        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse, Message
+        from veil.llm.providers.base import LLMConfig, LLMProvider
         from veil.llm.proxy import VeilProxy
 
         # Create mock provider
@@ -225,7 +226,7 @@ class TestVeilProxy:
 
     def test_proxy_anonymizes_input(self):
         """Test proxy anonymizes user input."""
-        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse, Message
+        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse
         from veil.llm.proxy import VeilProxy
 
         # Create mock provider
@@ -238,7 +239,7 @@ class TestVeilProxy:
 
         proxy = VeilProxy(provider=mock_provider, profile="balanced")
 
-        response = proxy.chat("My email is john@example.com")
+        proxy.chat("My email is john@example.com")
 
         # Check that provider was called with anonymized text
         call_args = mock_provider.chat.call_args
@@ -249,7 +250,7 @@ class TestVeilProxy:
 
     def test_proxy_reconstructs_response(self):
         """Test proxy reconstructs response with original values."""
-        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse, Message
+        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse
         from veil.llm.proxy import VeilProxy
 
         # Create mock provider
@@ -269,8 +270,8 @@ class TestVeilProxy:
 
     def test_proxy_response_attributes(self):
         """Test ProxyResponse has correct attributes."""
-        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse, Message
-        from veil.llm.proxy import VeilProxy, ProxyResponse
+        from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse
+        from veil.llm.proxy import ProxyResponse, VeilProxy
 
         mock_provider = MagicMock(spec=LLMProvider)
         mock_provider.name = "mock"
@@ -353,8 +354,9 @@ class TestDesktopAppFunctions:
 
     def test_create_app_returns_blocks(self):
         """Test create_app returns Gradio Blocks."""
-        from veil.app.desktop import create_app
         import gradio as gr
+
+        from veil.app.desktop import create_app
 
         app = create_app()
         assert isinstance(app, gr.Blocks)
@@ -371,16 +373,17 @@ class TestDesktopAppFunctions:
 
     def test_update_models_returns_dropdown(self):
         """Test update_models returns correct models."""
-        from veil.app.desktop import update_models, MODELS
         import gradio as gr
+
+        from veil.app.desktop import update_models
 
         result = update_models("OpenAI")
         assert isinstance(result, gr.Dropdown)
 
     def test_chat_response_without_proxy(self):
         """Test chat response when proxy not configured."""
-        from veil.app.desktop import chat_response
         import veil.app.desktop as desktop_module
+        from veil.app.desktop import chat_response
 
         # Ensure no proxy is set
         desktop_module.current_proxy = None

@@ -222,3 +222,38 @@ veil anonymize "text" --no-weighting
 ```python
 pipeline = VeilPipeline(use_weighting=False)
 ```
+
+## Custom profiles (YAML)
+
+The built-in profiles live in `src/veil/config/profiles/*.yaml` and any YAML
+file with the same shape can be used instead. Only list what you change; the
+rest falls back to the built-in defaults.
+
+```yaml
+threshold: 0.5
+rarity_factor: 0.1
+entity_weights:
+  PERSON: 0.95
+  EMPLOYEE_ID: 0.95        # weight for a custom pattern label
+custom_patterns:
+  - name: employee_id
+    entity_type: EMPLOYEE_ID    # any name; becomes the token [EMPLOYEE_ID_1]
+    regex: "\\bEMP-\\d{5}\\b"
+    confidence: 0.95
+    context: ["badge", "employee"]   # optional cue words nearby raise confidence
+    requires_context: false          # true: drop matches without a cue word
+```
+
+```bash
+veil anonymize "Badge EMP-48213 is active" --profile ./corp.yaml
+```
+
+```python
+from veil import VeilPipeline
+from veil.weighting.config import WeightConfig
+
+pipeline = VeilPipeline(weight_config=WeightConfig.from_yaml("corp.yaml"))
+```
+
+Unknown names under `entity_weights` are an error unless a `custom_patterns`
+entry declares them.

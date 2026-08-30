@@ -4,8 +4,8 @@ import pytest
 
 from veil.core.mapper import MappingStore
 from veil.detection.entity import Entity, EntityType
-from veil.replacement.token import TokenReplacer
 from veil.replacement.engine import ReplacementEngine, ReplacementMode, create_engine
+from veil.replacement.token import TokenReplacer
 
 
 class TestTokenReplacer:
@@ -124,7 +124,7 @@ class TestFakerReplacer:
         """Test faker can be imported."""
         pytest.importorskip("faker")
 
-        from veil.replacement.faker_gen import FakerReplacer, FAKER_AVAILABLE
+        from veil.replacement.faker_gen import FAKER_AVAILABLE
         assert FAKER_AVAILABLE
 
     def test_generate_person_replacement(self, mapping_store):

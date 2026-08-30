@@ -194,28 +194,43 @@ print(response.was_anonymized)         # True if entities were found
 
 ### Conversation History
 
+The proxy keeps the conversation itself, in the form the provider saw it
+(anonymized user turns, raw model turns), so follow-ups just work:
+
 ```python
-from veil.llm.providers.base import Message
-
-# Build conversation history
-history = [
-    Message(role="user", content="Hello"),
-    Message(role="assistant", content="Hi there!"),
-]
-
-# Continue conversation
-response = proxy.chat(
-    "My email is john@example.com",
-    conversation_history=history,
-)
+proxy.chat("My email is john@example.com")
+proxy.chat("Send the report there")          # provider sees "[EMAIL_1]" again
+print(proxy.history)                          # list[Message], anonymized
+proxy.clear_session()                         # new conversation: mappings + history
 ```
+
+You can still pass `conversation_history=[...]` explicitly (for example when
+restoring a conversation from storage). Those messages are anonymized before
+they are sent, so passing the original turns is safe.
 
 ### Streaming
 
+Chunks are yielded already reconstructed; a token split across two provider
+chunks is held back until it completes.
+
 ```python
-# Stream responses
 for chunk in proxy.chat_stream("My SSN is 123-45-6789"):
     print(chunk, end="", flush=True)
+```
+
+### Fail closed
+
+```python
+from veil.core.detector import DetectionUnavailableError
+
+try:
+    proxy = VeilProxy(provider)               # strict=True by default
+except DetectionUnavailableError as e:
+    ...                                       # spaCy model / Presidio missing
+
+proxy = VeilProxy(provider, strict=False)     # run degraded ...
+proxy.chat("...")                             # ... but this still raises unless
+proxy = VeilProxy(provider, strict=False, allow_degraded=True)
 ```
 
 ### Different Providers

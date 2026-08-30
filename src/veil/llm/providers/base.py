@@ -1,8 +1,9 @@
 """Base LLM provider interface."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -17,7 +18,7 @@ class Message:
     role: str
     content: str
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}
 
 
@@ -34,8 +35,8 @@ class LLMResponse:
 
     content: str
     model: str = ""
-    usage: Dict[str, int] = field(default_factory=dict)
-    raw_response: Optional[Any] = None
+    usage: dict[str, int] = field(default_factory=dict)
+    raw_response: Any | None = None
 
 
 @dataclass
@@ -53,10 +54,10 @@ class LLMConfig:
 
     api_key: str = ""
     model: str = ""
-    base_url: Optional[str] = None
+    base_url: str | None = None
     temperature: float = 0.7
     max_tokens: int = 2048
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class LLMProvider(ABC):
@@ -81,15 +82,15 @@ class LLMProvider(ABC):
 
     @property
     @abstractmethod
-    def available_models(self) -> List[str]:
+    def available_models(self) -> list[str]:
         """List of available models."""
         pass
 
     @abstractmethod
     def chat(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> LLMResponse:
         """Send a chat request to the LLM.
 
@@ -104,8 +105,8 @@ class LLMProvider(ABC):
 
     def chat_stream(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> Generator[str, None, None]:
         """Stream a chat response from the LLM.
 

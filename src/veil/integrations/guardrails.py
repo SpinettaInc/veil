@@ -15,11 +15,11 @@ Example:
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 try:
-    from guardrails import Guard, OnFailAction
-    from guardrails.validators import (
+    from guardrails import Guard, OnFailAction  # type: ignore[import-untyped]
+    from guardrails.validators import (  # type: ignore[import-untyped]
         FailResult,
         PassResult,
         ValidationResult,
@@ -31,26 +31,25 @@ try:
 except ImportError:
     GUARDRAILS_AVAILABLE = False
     # Create stub classes for type hints
-    Guard = None  # type: ignore
-    OnFailAction = None  # type: ignore
-    Validator = object  # type: ignore
-    ValidationResult = None  # type: ignore
+    Guard = None
+    OnFailAction = None
+    Validator = object
+    ValidationResult = None
 
-    def register_validator(*args, **kwargs):  # type: ignore
-        def decorator(cls):
+    def register_validator(*args: Any, **kwargs: Any) -> Any:
+        def decorator(cls: Any) -> Any:
             return cls
         return decorator
 
-    class PassResult:  # type: ignore
+    class PassResult:  # type: ignore[no-redef]
         pass
 
-    class FailResult:  # type: ignore
-        def __init__(self, *args, **kwargs):
+    class FailResult:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
 
 from veil.core.pipeline import VeilPipeline
-from veil.core.mapper import MappingStore
 from veil.detection.entity import Entity, EntityType
 from veil.weighting.config import DetectionProfile
 
@@ -69,7 +68,7 @@ class PIIValidationResult:
 
     has_pii: bool
     entity_count: int
-    entities: List[Entity]
+    entities: list[Entity]
     anonymized_text: str
     original_text: str
 
@@ -77,7 +76,7 @@ class PIIValidationResult:
 if GUARDRAILS_AVAILABLE:
 
     @register_validator(name="veil/pii-detector", data_type="string")
-    class VeilPIIValidator(Validator):
+    class VeilPIIValidator(Validator):  # type: ignore[misc]
         """Guardrails validator that detects PII using Veil.
 
         This validator uses Veil's hybrid detection engine (spaCy + Presidio +
@@ -115,10 +114,10 @@ if GUARDRAILS_AVAILABLE:
             replacement_mode: str = "token",
             use_presidio: bool = True,
             min_entities: int = 1,
-            entity_types: Optional[List[str]] = None,
-            on_fail: Optional[OnFailAction] = None,
-            **kwargs,
-        ):
+            entity_types: list[str] | None = None,
+            on_fail: OnFailAction | None = None,
+            **kwargs: Any,
+        ) -> None:
             super().__init__(on_fail=on_fail or OnFailAction.NOOP, **kwargs)
 
             self.profile = profile
@@ -135,7 +134,7 @@ if GUARDRAILS_AVAILABLE:
                 self._profile = DetectionProfile.BALANCED
 
             # Parse entity types if provided
-            self._entity_types: Optional[List[EntityType]] = None
+            self._entity_types: list[EntityType] | None = None
             if entity_types:
                 self._entity_types = []
                 for et in entity_types:
@@ -145,7 +144,7 @@ if GUARDRAILS_AVAILABLE:
                         pass  # Skip invalid types
 
             # Create pipeline (lazy initialization)
-            self._pipeline: Optional[VeilPipeline] = None
+            self._pipeline: VeilPipeline | None = None
 
         def _get_pipeline(self) -> VeilPipeline:
             """Get or create the Veil pipeline."""
@@ -163,7 +162,7 @@ if GUARDRAILS_AVAILABLE:
         def _validate(
             self,
             value: str,
-            metadata: Optional[Dict[str, Any]] = None,
+            metadata: dict[str, Any] | None = None,
         ) -> ValidationResult:
             """Validate text for PII.
 
@@ -200,9 +199,9 @@ if GUARDRAILS_AVAILABLE:
 
             return PassResult()
 
-        def _build_entity_summary(self, entities: List[Entity]) -> str:
+        def _build_entity_summary(self, entities: list[Entity]) -> str:
             """Build a summary of detected entities by type."""
-            type_counts: Dict[str, int] = {}
+            type_counts: dict[str, int] = {}
             for entity in entities:
                 type_name = entity.entity_type.value
                 type_counts[type_name] = type_counts.get(type_name, 0) + 1
@@ -210,7 +209,7 @@ if GUARDRAILS_AVAILABLE:
             parts = [f"{count} {etype}" for etype, count in type_counts.items()]
             return f"Types: {', '.join(parts)}"
 
-        def get_args(self) -> Dict[str, Any]:
+        def get_args(self) -> dict[str, Any]:
             """Get validator arguments for serialization."""
             return {
                 "profile": self.profile,
@@ -222,7 +221,7 @@ if GUARDRAILS_AVAILABLE:
             }
 
     @register_validator(name="veil/anonymizer", data_type="string")
-    class VeilAnonymizer(Validator):
+    class VeilAnonymizer(Validator):  # type: ignore[misc]
         """Guardrails validator that always anonymizes text.
 
         Unlike VeilPIIValidator which can pass or fail, this validator
@@ -251,8 +250,8 @@ if GUARDRAILS_AVAILABLE:
             replacement_mode: str = "token",
             detection_mode: str = "hybrid",
             use_presidio: bool = True,
-            **kwargs,
-        ):
+            **kwargs: Any,
+        ) -> None:
             # Always use FIX since we always want to anonymize
             super().__init__(on_fail=OnFailAction.FIX, **kwargs)
 
@@ -266,7 +265,7 @@ if GUARDRAILS_AVAILABLE:
             except ValueError:
                 self._profile = DetectionProfile.BALANCED
 
-            self._pipeline: Optional[VeilPipeline] = None
+            self._pipeline: VeilPipeline | None = None
 
         def _get_pipeline(self) -> VeilPipeline:
             """Get or create the Veil pipeline."""
@@ -284,7 +283,7 @@ if GUARDRAILS_AVAILABLE:
         def _validate(
             self,
             value: str,
-            metadata: Optional[Dict[str, Any]] = None,
+            metadata: dict[str, Any] | None = None,
         ) -> ValidationResult:
             """Always anonymize text.
 
@@ -310,7 +309,7 @@ if GUARDRAILS_AVAILABLE:
             # No entities found, but still return the (unchanged) text
             return PassResult()
 
-        def get_args(self) -> Dict[str, Any]:
+        def get_args(self) -> dict[str, Any]:
             """Get validator arguments for serialization."""
             return {
                 "profile": self.profile,
@@ -325,7 +324,7 @@ if GUARDRAILS_AVAILABLE:
         replacement_mode: str = "token",
         use_presidio: bool = True,
         on_fail: OnFailAction = OnFailAction.FIX,
-        entity_types: Optional[List[str]] = None,
+        entity_types: list[str] | None = None,
     ) -> Guard:
         """Create a Guardrails Guard configured with Veil PII detection.
 
@@ -364,25 +363,25 @@ if GUARDRAILS_AVAILABLE:
 else:
     # Stubs when Guardrails is not available
 
-    class VeilPIIValidator:  # type: ignore
+    class VeilPIIValidator:  # type: ignore[no-redef]
         """Stub class when Guardrails AI is not installed."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
                 "Guardrails AI is not installed. Install it with:\n"
                 "  pip install guardrails-ai"
             )
 
-    class VeilAnonymizer:  # type: ignore
+    class VeilAnonymizer:  # type: ignore[no-redef]
         """Stub class when Guardrails AI is not installed."""
 
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             raise ImportError(
                 "Guardrails AI is not installed. Install it with:\n"
                 "  pip install guardrails-ai"
             )
 
-    def create_veil_guard(*args, **kwargs):  # type: ignore
+    def create_veil_guard(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
         """Stub function when Guardrails AI is not installed."""
         raise ImportError(
             "Guardrails AI is not installed. Install it with:\n"

@@ -4,17 +4,15 @@ import pytest
 
 from veil.detection.entity import Entity, EntityType
 from veil.weighting.config import (
-    WeightConfig,
     DetectionProfile,
-    ContextPattern,
-    get_profile_config,
-    get_paranoid_config,
-    get_balanced_config,
+    WeightConfig,
     get_minimal_config,
+    get_paranoid_config,
+    get_profile_config,
 )
-from veil.weighting.tfidf import DocumentStats, RarityScorer, GlobalRarityScorer
-from veil.weighting.context import ContextAnalyzer, RelationshipAnalyzer
-from veil.weighting.scorer import PrivacyScorer, PrivacyScore
+from veil.weighting.context import ContextAnalyzer
+from veil.weighting.scorer import PrivacyScore, PrivacyScorer
+from veil.weighting.tfidf import DocumentStats, GlobalRarityScorer, RarityScorer
 
 
 class TestWeightConfig:
@@ -345,8 +343,8 @@ class TestDetectionProfiles:
         )
         text = "New York is a city"
 
-        paranoid_score = paranoid.score_entity(entity, text)
-        minimal_score = minimal.score_entity(entity, text)
+        paranoid.score_entity(entity, text)
+        minimal.score_entity(entity, text)
 
         # Paranoid should have lower threshold, so more likely above
         assert paranoid.config.threshold < minimal.config.threshold

@@ -1,12 +1,43 @@
 """Privacy score calculator combining all weighting factors."""
 
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
-from veil.detection.entity import Entity
-from veil.weighting.config import WeightConfig, DetectionProfile, get_profile_config
-from veil.weighting.tfidf import DocumentStats, GlobalRarityScorer
+from veil.detection.entity import Entity, EntityType
+from veil.weighting.config import DetectionProfile, WeightConfig, get_profile_config
 from veil.weighting.context import ContextAnalyzer, RelationshipAnalyzer
+from veil.weighting.tfidf import DocumentStats, GlobalRarityScorer
+
+
+def _mask_tokens(text: str) -> str:
+    """Blank out "[PERSON_1]"-style strings so they cannot act as context cues.
+
+    Cached per text: score_entity is called once per entity of a document.
+    """
+    cached = _MASK_CACHE.get(text)
+    if cached is not None:
+        return cached
+    from veil.core.mapper import token_spans
+
+    spans = token_spans(text)
+    masked = text
+    if spans:
+        chars = list(text)
+        for start, end in spans:
+            chars[start:end] = " " * (end - start)
+        masked = "".join(chars)
+    if len(_MASK_CACHE) > 32:
+        _MASK_CACHE.clear()
+    _MASK_CACHE[text] = masked
+    return masked
+
+
+_MASK_CACHE: dict[str, str] = {}
+
+_NON_IDENTIFYING_TYPES = frozenset({
+    EntityType.CARDINAL, EntityType.ORDINAL, EntityType.QUANTITY, EntityType.PERCENT,
+})
 
 
 @dataclass
@@ -23,6 +54,7 @@ class PrivacyScore:
         relationship_boost: Boost from entity relationships
         above_threshold: Whether score exceeds anonymization threshold
         contributing_factors: Human-readable list of factors
+        confidence_factor: Multiplier derived from detector confidence
     """
 
     entity: Entity
@@ -34,8 +66,9 @@ class PrivacyScore:
     relationship_boost: float
     above_threshold: bool
     contributing_factors: list[str]
+    confidence_factor: float = 1.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "entity_text": self.entity.text,
@@ -46,6 +79,7 @@ class PrivacyScore:
             "rarity_boost": round(self.rarity_boost, 3),
             "context_boost": round(self.context_boost, 3),
             "relationship_boost": round(self.relationship_boost, 3),
+            "confidence_factor": round(self.confidence_factor, 2),
             "above_threshold": self.above_threshold,
             "factors": self.contributing_factors,
         }
@@ -75,8 +109,8 @@ class PrivacyScorer:
 
     def __init__(
         self,
-        config: Optional[WeightConfig] = None,
-        profile: Optional[DetectionProfile] = None,
+        config: WeightConfig | None = None,
+        profile: DetectionProfile | None = None,
     ) -> None:
         """Initialize the privacy scorer.
 
@@ -97,8 +131,10 @@ class PrivacyScorer:
         self.context_analyzer = ContextAnalyzer.from_config(self.config)
         self.relationship_analyzer = RelationshipAnalyzer()
 
-        # Cache for document stats
-        self._doc_stats_cache: dict[int, DocumentStats] = {}
+        # Small LRU of document stats: a long-lived proxy sees many texts,
+        # so this must not grow without bound.
+        self._doc_stats_cache: OrderedDict[int, DocumentStats] = OrderedDict()
+        self._doc_stats_cache_size = 16
 
     def _get_doc_stats(self, text: str) -> DocumentStats:
         """Get or compute document statistics.
@@ -112,16 +148,23 @@ class PrivacyScorer:
             DocumentStats for the text
         """
         text_hash = hash(text)
-        if text_hash not in self._doc_stats_cache:
-            self._doc_stats_cache[text_hash] = DocumentStats.from_text(text)
-        return self._doc_stats_cache[text_hash]
+        stats = self._doc_stats_cache.get(text_hash)
+        if stats is None:
+            stats = DocumentStats.from_text(text)
+            self._doc_stats_cache[text_hash] = stats
+            if len(self._doc_stats_cache) > self._doc_stats_cache_size:
+                self._doc_stats_cache.popitem(last=False)
+        else:
+            self._doc_stats_cache.move_to_end(text_hash)
+        return stats
 
     def score_entity(
         self,
         entity: Entity,
         full_text: str,
-        all_entities: Optional[list[Entity]] = None,
-        pos_tag: Optional[str] = None,
+        all_entities: list[Entity] | None = None,
+        pos_tag: str | None = None,
+        relationship_boost: float | None = None,
     ) -> PrivacyScore:
         """Calculate privacy score for an entity.
 
@@ -130,6 +173,8 @@ class PrivacyScorer:
             full_text: Full document text (for context/rarity analysis)
             all_entities: All entities in document (for relationship analysis)
             pos_tag: Part-of-speech tag (if known from NLP)
+            relationship_boost: Precomputed relationship boost (skips the
+                per-entity relationship scan; used by ``score_entities``)
 
         Returns:
             Detailed PrivacyScore object
@@ -137,7 +182,11 @@ class PrivacyScorer:
         contributing_factors: list[str] = []
 
         # 1. Base score from entity type
-        base_score = self.config.get_entity_weight(entity.entity_type)
+        base_score = self.config.get_entity_weight(
+            entity.entity_type,
+            entity.metadata.get("label") if entity.metadata else None,
+            entity.text,
+        )
         contributing_factors.append(
             f"Entity type {entity.entity_type.value}: {base_score:.2f}"
         )
@@ -160,27 +209,46 @@ class PrivacyScorer:
                 f"Term rarity: +{rarity_boost:.3f}"
             )
 
-        # 4. Context boost
-        context_boost = self.context_analyzer.calculate_boost(entity, full_text)
+        # 4. Context boost (analyse once; boost and descriptions come from the same matches).
+        # Bare numbers/quantities are not identifiers, so surrounding "medical" or
+        # "financial" vocabulary must not promote them.
+        context_matches = (
+            [] if entity.entity_type in _NON_IDENTIFYING_TYPES
+            else self.context_analyzer.analyze(entity, _mask_tokens(full_text))
+        )
+        context_boost = min(0.5, sum(m.boost for m in context_matches)) if context_matches else 0.0
         if context_boost > 0:
-            patterns = self.context_analyzer.get_matching_patterns(entity, full_text)
+            patterns = [m.pattern.description for m in context_matches if m.pattern.description]
             contributing_factors.append(
                 f"Context patterns: +{context_boost:.3f} ({', '.join(patterns[:2])})"
             )
 
         # 5. Relationship boost
-        relationship_boost = 0.0
-        if all_entities and len(all_entities) > 1:
-            relationship_boost = self.relationship_analyzer.calculate_relationship_boost(
-                entity, all_entities, full_text
-            )
-            if relationship_boost > 0:
-                contributing_factors.append(
-                    f"Entity relationships: +{relationship_boost:.3f}"
+        if entity.entity_type in _NON_IDENTIFYING_TYPES:
+            relationship_boost = 0.0
+        elif relationship_boost is None:
+            relationship_boost = 0.0
+            if all_entities and len(all_entities) > 1:
+                relationship_boost = self.relationship_analyzer.calculate_relationship_boost(
+                    entity, all_entities, full_text
                 )
+        if relationship_boost > 0:
+            contributing_factors.append(
+                f"Entity relationships: +{relationship_boost:.3f}"
+            )
+
+        # 6. Detector confidence. A weak, context-less regex hit (e.g. "any 8
+        # digits" as a bank account at 0.4) must not inherit the full type
+        # weight. Confident detections (>= 0.85) are unaffected.
+        confidence_factor = min(1.0, entity.confidence + 0.15)
+        if confidence_factor < 1.0:
+            contributing_factors.append(f"Detector confidence: x{confidence_factor:.2f}")
 
         # Calculate total score
-        total_score = (base_score * pos_multiplier) + rarity_boost + context_boost + relationship_boost
+        total_score = (
+            (base_score * pos_multiplier * confidence_factor)
+            + rarity_boost + context_boost + relationship_boost
+        )
 
         # Clamp to [0, 1]
         total_score = max(0.0, min(1.0, total_score))
@@ -198,6 +266,7 @@ class PrivacyScorer:
             relationship_boost=relationship_boost,
             above_threshold=above_threshold,
             contributing_factors=contributing_factors,
+            confidence_factor=confidence_factor,
         )
 
     def score_entities(
@@ -217,15 +286,19 @@ class PrivacyScorer:
         Returns:
             List of PrivacyScore objects
         """
-        scores = []
-        for entity in entities:
-            score = self.score_entity(
+        boosts = (
+            self.relationship_analyzer.boosts_by_entity(entities, _mask_tokens(full_text))
+            if len(entities) > 1 else {}
+        )
+        return [
+            self.score_entity(
                 entity=entity,
                 full_text=full_text,
                 all_entities=entities,
+                relationship_boost=boosts.get(id(entity), 0.0),
             )
-            scores.append(score)
-        return scores
+            for entity in entities
+        ]
 
     def filter_by_threshold(
         self,
@@ -244,7 +317,7 @@ class PrivacyScorer:
         scores = self.score_entities(entities, full_text)
         return [s.entity for s in scores if s.above_threshold]
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Get scorer statistics.
 
         Returns:

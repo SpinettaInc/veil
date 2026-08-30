@@ -1,0 +1,17 @@
+# A company profile: stricter than balanced, plus two in-house identifier formats.
+threshold: 0.45
+entity_weights:
+  PERSON: 1.0
+  EMPLOYEE_ID: 0.95
+  PROJECT_CODE: 0.7
+custom_patterns:
+  - name: employee_id
+    entity_type: EMPLOYEE_ID
+    regex: "\\bEMP-\\d{5}\\b"
+    confidence: 0.95
+  - name: project_code
+    entity_type: PROJECT_CODE
+    regex: "\\b[A-Z]{3}-\\d{3}\\b"
+    confidence: 0.6
+    context: ["project", "codename", "initiative"]
+    requires_context: true

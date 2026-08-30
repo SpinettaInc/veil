@@ -21,6 +21,8 @@ VeilPipeline(
     faker_locale: str = "en_US",
     faker_seed: int | None = None,
     detection_mode: str = "standard",
+    agreement_boost: float = 0.15,
+    strict: bool = True,
 )
 ```
 
@@ -37,6 +39,9 @@ VeilPipeline(
 | `faker_locale` | str | "en_US" | Locale for faker mode |
 | `faker_seed` | int | None | Seed for reproducibility |
 | `detection_mode` | str | "standard" | Detection mode |
+| `agreement_boost` | float | 0.15 | Hybrid mode: confidence added per extra agreeing detector |
+| `strict` | bool | True | Raise `DetectionUnavailableError` if a requested detector cannot load; with `False`, results carry `degraded=True` |
+| `weight_config` | WeightConfig | None | Custom profile (e.g. `WeightConfig.from_yaml(path)`); overrides `profile` and registers its `custom_patterns` |
 
 ### Methods
 

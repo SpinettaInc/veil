@@ -6,11 +6,15 @@ This module provides the core proxy functionality that:
 3. Reconstructs the response with original values
 """
 
+import re
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import Generator, List, Optional
+from typing import Any
 
-from veil.core.pipeline import VeilPipeline, AnonymizationResult
-from veil.llm.providers.base import LLMConfig, LLMProvider, LLMResponse, Message
+from veil.audit import AuditLogger
+from veil.core.detector import DetectionUnavailableError
+from veil.core.pipeline import AnonymizationResult, VeilPipeline
+from veil.llm.providers.base import LLMProvider, Message
 from veil.weighting.config import DetectionProfile
 
 
@@ -32,7 +36,7 @@ class ProxyResponse:
     raw_response: str
     reconstructed_response: str
     entities_found: int = 0
-    mappings: dict = field(default_factory=dict)
+    mappings: dict[str, str] = field(default_factory=dict)
 
     @property
     def was_anonymized(self) -> bool:
@@ -67,7 +71,10 @@ class VeilProxy:
         detection_mode: str = "hybrid",
         replacement_mode: str = "token",
         use_presidio: bool = True,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
+        strict: bool = True,
+        allow_degraded: bool = False,
+        audit: AuditLogger | None = None,
     ):
         """Initialize the Veil proxy.
 
@@ -81,6 +88,10 @@ class VeilProxy:
         """
         self.provider = provider
         self.system_prompt = system_prompt
+        self.allow_degraded = allow_degraded
+        # Conversation history as the provider saw it (anonymized user turns,
+        # raw model turns). Callers never need to keep their own copy.
+        self.history: list[Message] = []
 
         # Parse profile
         try:
@@ -96,13 +107,62 @@ class VeilProxy:
             profile=self._profile,
             detection_mode=detection_mode,
             replacement_mode=replacement_mode,
+            strict=strict,
+            audit=audit,
         )
+
+    def _prepare_messages(
+        self, user_input: str, conversation_history: list[Message] | None
+    ) -> tuple[list[Message], "AnonymizationResult"]:
+        """Anonymize the input and assemble the outbound message list.
+
+        Any caller-supplied history is anonymized too: it is the natural
+        thing to pass the original turns, and those must not reach the
+        provider. Assistant turns are passed through the same pass, which is
+        a no-op for text that only contains tokens.
+        """
+        anon_result = self.pipeline.anonymize(user_input)
+        if anon_result.degraded and not self.allow_degraded:
+            raise DetectionUnavailableError(
+                "Refusing to send: detection is degraded ("
+                + "; ".join(self.pipeline.detector.degradation_reasons)
+                + "). Fix the installation or pass allow_degraded=True."
+            )
+
+        messages: list[Message] = []
+        if self.system_prompt:
+            messages.append(Message(role="system", content=self.system_prompt))
+
+        history = self.history if conversation_history is None else [
+            Message(
+                role=m.role,
+                content=self.pipeline.anonymize(m.content).anonymized_text
+                if m.role == "user"
+                else m.content,
+            )
+            for m in conversation_history
+        ]
+        messages.extend(history)
+        messages.append(Message(role="user", content=anon_result.anonymized_text))
+        return messages, anon_result
+
+    def _record_turn(self, anonymized_input: str, raw_response: str) -> None:
+        self.history.append(Message(role="user", content=anonymized_input))
+        self.history.append(Message(role="assistant", content=raw_response))
+        if self.pipeline.audit is not None:
+            self.pipeline.audit.log_event(
+                "llm_request",
+                provider=self.provider.name,
+                model=self.provider.config.model,
+                turns=len(self.history) // 2,
+                response_chars=len(raw_response),
+            )
 
     def chat(
         self,
         user_input: str,
-        conversation_history: Optional[List[Message]] = None,
-        **kwargs,
+        conversation_history: list[Message] | None = None,
+        **kwargs: Any,
     ) -> ProxyResponse:
         """Send a chat message through the privacy proxy.
 
@@ -114,25 +174,11 @@ class VeilProxy:
         Returns:
             ProxyResponse with anonymized/reconstructed data
         """
-        # Anonymize user input
-        anon_result = self.pipeline.anonymize(user_input)
-
-        # Build message list
-        messages = []
-
-        # Add system prompt if configured
-        if self.system_prompt:
-            messages.append(Message(role="system", content=self.system_prompt))
-
-        # Add conversation history
-        if conversation_history:
-            messages.extend(conversation_history)
-
-        # Add anonymized user message
-        messages.append(Message(role="user", content=anon_result.anonymized_text))
+        messages, anon_result = self._prepare_messages(user_input, conversation_history)
 
         # Call LLM
         llm_response = self.provider.chat(messages, **kwargs)
+        self._record_turn(anon_result.anonymized_text, llm_response.content)
 
         # Reconstruct response
         recon_result = self.pipeline.reconstruct(llm_response.content)
@@ -149,13 +195,15 @@ class VeilProxy:
     def chat_stream(
         self,
         user_input: str,
-        conversation_history: Optional[List[Message]] = None,
-        **kwargs,
+        conversation_history: list[Message] | None = None,
+        **kwargs: Any,
     ) -> Generator[str, None, ProxyResponse]:
         """Stream a chat response through the privacy proxy.
 
-        Note: Streaming returns tokens as they come. Full reconstruction
-        happens at the end.
+        Chunks are yielded already reconstructed. Because a token such as
+        "[PERSON_1]" can be split across provider chunks, a possibly
+        incomplete token at the end of the buffer is held back until the
+        next chunk (or the end of the stream) resolves it.
 
         Args:
             user_input: The user's message
@@ -163,32 +211,26 @@ class VeilProxy:
             **kwargs: Additional LLM options
 
         Yields:
-            Chunks of the response (not yet reconstructed)
+            Reconstructed chunks of the response
 
         Returns:
             ProxyResponse with full reconstructed response
         """
-        # Anonymize user input
-        anon_result = self.pipeline.anonymize(user_input)
+        messages, anon_result = self._prepare_messages(user_input, conversation_history)
 
-        # Build message list
-        messages = []
-
-        if self.system_prompt:
-            messages.append(Message(role="system", content=self.system_prompt))
-
-        if conversation_history:
-            messages.extend(conversation_history)
-
-        messages.append(Message(role="user", content=anon_result.anonymized_text))
-
-        # Stream response
         full_response = ""
+        pending = ""
         for chunk in self.provider.chat_stream(messages, **kwargs):
             full_response += chunk
-            yield chunk
+            pending += chunk
+            safe_len = self._safe_flush_length(pending)
+            if safe_len:
+                yield self.pipeline.reconstruct(pending[:safe_len]).reconstructed_text
+                pending = pending[safe_len:]
+        if pending:
+            yield self.pipeline.reconstruct(pending).reconstructed_text
 
-        # Reconstruct final response
+        self._record_turn(anon_result.anonymized_text, full_response)
         recon_result = self.pipeline.reconstruct(full_response)
 
         return ProxyResponse(
@@ -200,15 +242,30 @@ class VeilProxy:
             mappings=anon_result.replacements,
         )
 
-    def clear_session(self) -> None:
-        """Clear the current session mappings.
+    _PARTIAL_TOKEN_RE = re.compile(r"(?:[\[<{][^\]>}]{0,40}|[A-Z][A-Z_]{0,30}[\s_-]?\d{0,6})$")
 
-        Call this when starting a new conversation to reset
-        the anonymization mappings.
+    @classmethod
+    def _safe_flush_length(cls, buffer: str) -> int:
+        """Length of the prefix that cannot end inside a token.
+
+        Holds back an unclosed bracket and its content, or a trailing run of
+        uppercase letters/digits that could be the start of a bare "PERSON_1".
+        """
+        m = cls._PARTIAL_TOKEN_RE.search(buffer)
+        return m.start() if m else len(buffer)
+
+    def clear_session(self) -> None:
+        """Clear the current session: mappings and conversation history.
+
+        Call this when starting a new conversation.
         """
         self.pipeline.clear_mappings()
+        self.history.clear()
+        if self.pipeline.audit is not None:
+            self.pipeline.audit.log_event("session_clear")
+            self.pipeline.audit.new_session()
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Get proxy statistics.
 
         Returns:

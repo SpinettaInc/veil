@@ -4,8 +4,8 @@ Uses word embeddings to find semantically similar replacements
 that preserve the meaning and role of entities in context.
 """
 
-from typing import Optional, Protocol
 import random
+from typing import Any, Protocol, cast
 
 from veil.core.mapper import MappingStore
 from veil.detection.entity import Entity, EntityType
@@ -14,7 +14,7 @@ from veil.detection.entity import Entity, EntityType
 class EmbeddingModel(Protocol):
     """Protocol for embedding models."""
 
-    def get_vector(self, word: str) -> Optional[list[float]]:
+    def get_vector(self, word: str) -> list[float] | None:
         """Get embedding vector for a word."""
         ...
 
@@ -22,7 +22,7 @@ class EmbeddingModel(Protocol):
         self,
         word: str,
         topn: int = 10,
-        exclude: Optional[set[str]] = None,
+        exclude: set[str] | None = None,
     ) -> list[tuple[str, float]]:
         """Find most similar words to given word."""
         ...
@@ -31,16 +31,16 @@ class EmbeddingModel(Protocol):
 class SpacyEmbeddings:
     """Use spaCy's word vectors for embeddings."""
 
-    def __init__(self, nlp=None):
+    def __init__(self, nlp: Any = None) -> None:
         """Initialize with spaCy model.
 
         Args:
             nlp: spaCy model with word vectors, or None to auto-load
         """
         self.nlp = nlp
-        self._vocab_cache: Optional[list[str]] = None
+        self._vocab_cache: list[str] | None = None
 
-    def _ensure_nlp(self):
+    def _ensure_nlp(self) -> None:
         """Lazy load spaCy model."""
         if self.nlp is None:
             import spacy
@@ -58,20 +58,20 @@ class SpacyEmbeddings:
                     "python -m spacy download en_core_web_lg"
                 )
 
-    def get_vector(self, word: str) -> Optional[list[float]]:
+    def get_vector(self, word: str) -> list[float] | None:
         """Get embedding vector for a word."""
         self._ensure_nlp()
 
         token = self.nlp(word)[0]
         if token.has_vector:
-            return token.vector.tolist()
+            return cast(list[float], token.vector.tolist())
         return None
 
     def most_similar(
         self,
         word: str,
         topn: int = 10,
-        exclude: Optional[set[str]] = None,
+        exclude: set[str] | None = None,
     ) -> list[tuple[str, float]]:
         """Find most similar words using spaCy vectors.
 
@@ -138,7 +138,7 @@ class SemanticReplacer:
 
     def __init__(
         self,
-        embeddings: Optional[EmbeddingModel] = None,
+        embeddings: EmbeddingModel | None = None,
         similarity_threshold: float = 0.6,
         use_fallback: bool = True,
     ) -> None:
@@ -160,7 +160,7 @@ class SemanticReplacer:
         # Track used replacements to avoid duplicates
         self._used_replacements: set[str] = set()
 
-    def _lazy_init(self):
+    def _lazy_init(self) -> None:
         """Lazy initialize embeddings model."""
         if self._initialized:
             return
@@ -250,7 +250,7 @@ class SemanticReplacer:
         # Last resort: return token-style
         return f"[{entity.entity_type.value.upper()}]"
 
-    def _find_similar_replacement(self, entity: Entity) -> Optional[str]:
+    def _find_similar_replacement(self, entity: Entity) -> str | None:
         """Find semantically similar replacement using embeddings.
 
         Args:
@@ -371,7 +371,7 @@ class SemanticReplacer:
         # Fall back to standard replacement
         return self.generate_replacement(entity, mapping_store)
 
-    def _detect_role(self, context: str, entity: Entity) -> Optional[str]:
+    def _detect_role(self, context: str, entity: Entity) -> str | None:
         """Detect the role of an entity from context.
 
         Args:
@@ -403,7 +403,7 @@ class SemanticReplacer:
         self,
         entity: Entity,
         role: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Find replacement appropriate for detected role.
 
         Args:
