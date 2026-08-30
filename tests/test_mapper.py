@@ -2,7 +2,7 @@
 
 import pytest
 
-from veil.core.mapper import MappingStore, MappingEntry
+from veil.core.mapper import MappingEntry, MappingStore
 from veil.detection.entity import Entity, EntityType
 
 

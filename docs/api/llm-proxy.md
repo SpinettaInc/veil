@@ -52,10 +52,14 @@ def chat(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `user_input` | str | User's message |
-| `conversation_history` | list[Message] | Previous messages |
+| `conversation_history` | list[Message] | Previous messages. Optional: the proxy keeps its own anonymized history in `proxy.history`. If you pass raw messages they are anonymized before being sent. |
 | `**kwargs` | dict | Additional LLM options |
 
 **Returns:** `ProxyResponse`
+
+**Raises:** `DetectionUnavailableError` if detection is degraded (a requested
+detector could not be loaded) and the proxy was not created with
+`allow_degraded=True`.
 
 **Example:**
 
@@ -79,7 +83,9 @@ def chat_stream(
 ) -> Generator[str, None, ProxyResponse]
 ```
 
-**Yields:** Response chunks (not yet reconstructed)
+**Yields:** Reconstructed response chunks. A token that is split across
+provider chunks (`"[PER"` + `"SON_1]"`) is held back until it completes, so
+the yielded text never contains a half token.
 
 **Returns:** `ProxyResponse` with full reconstructed response
 
@@ -95,7 +101,7 @@ for chunk in gen:
 
 #### clear_session
 
-Clear the current session mappings.
+Clear the current session: the token mappings and `proxy.history`.
 
 ```python
 def clear_session(self) -> None

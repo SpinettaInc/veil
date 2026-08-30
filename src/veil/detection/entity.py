@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any
 
 
 class EntityType(str, Enum):
@@ -73,7 +73,7 @@ class Entity:
     confidence: float = 1.0
     source: str = "unknown"
     context: str = ""
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate entity after initialization."""
@@ -97,7 +97,7 @@ class Entity:
         """Check if this entity fully contains another entity."""
         return self.start <= other.start and self.end >= other.end
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert entity to dictionary representation."""
         return {
             "text": self.text,
@@ -111,7 +111,7 @@ class Entity:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Entity":
+    def from_dict(cls, data: dict[str, Any]) -> "Entity":
         """Create entity from dictionary representation."""
         return cls(
             text=data["text"],
@@ -131,41 +131,59 @@ class Entity:
         )
 
 
-def merge_overlapping_entities(entities: list[Entity]) -> list[Entity]:
-    """Merge overlapping entities, keeping the one with higher confidence.
+# Structured, validated PII (regex + checksum) should win over a generic NER
+# span covering the same characters; NER numeric/temporal labels are the
+# least specific and lose to anything else.
+_GENERIC_TYPES: frozenset[EntityType] = frozenset({
+    EntityType.CARDINAL, EntityType.ORDINAL, EntityType.QUANTITY,
+    EntityType.PERCENT, EntityType.DATE, EntityType.TIME, EntityType.MONEY,
+    EntityType.UNKNOWN,
+})
+_STRUCTURED_TYPES: frozenset[EntityType] = frozenset({
+    EntityType.EMAIL, EntityType.PHONE, EntityType.SSN, EntityType.CREDIT_CARD,
+    EntityType.IP_ADDRESS, EntityType.URL, EntityType.IBAN, EntityType.PASSPORT,
+    EntityType.DRIVER_LICENSE, EntityType.BANK_ACCOUNT, EntityType.MEDICAL_RECORD,
+    EntityType.HEALTH_PLAN, EntityType.DEVICE_ID, EntityType.LICENSE_PLATE,
+})
 
-    When entities overlap, the one with higher confidence wins.
-    If confidences are equal, the longer entity wins.
+
+def _specificity(entity: Entity) -> int:
+    if entity.entity_type in _STRUCTURED_TYPES:
+        return 2
+    if entity.entity_type in _GENERIC_TYPES:
+        return 0
+    return 1
+
+
+def _rank(entity: Entity) -> tuple[int, float, int]:
+    return (_specificity(entity), entity.confidence, entity.length)
+
+
+def merge_overlapping_entities(entities: list[Entity]) -> list[Entity]:
+    """Merge overlapping entities into a non-overlapping list.
+
+    When two entities overlap the winner is chosen by, in order:
+    type specificity (structured PII > named entity > generic NER label),
+    confidence, then span length. Runs in O(n log n): after sorting by
+    start position a new entity can only overlap the last kept one.
 
     Args:
         entities: List of entities to merge
 
     Returns:
-        List of non-overlapping entities
+        List of non-overlapping entities sorted by position
     """
     if not entities:
         return []
 
-    # Sort by start position, then by length (descending)
     sorted_entities = sorted(entities, key=lambda e: (e.start, -(e.end - e.start)))
 
     merged: list[Entity] = []
     for entity in sorted_entities:
-        # Check if this entity overlaps with any already merged entity
-        overlap_found = False
-        for i, existing in enumerate(merged):
-            if entity.overlaps(existing):
-                overlap_found = True
-                # Keep the one with higher confidence, or longer if tied
-                if entity.confidence > existing.confidence or (
-                    entity.confidence == existing.confidence
-                    and entity.length > existing.length
-                ):
-                    merged[i] = entity
-                break
+        if merged and entity.overlaps(merged[-1]):
+            if _rank(entity) > _rank(merged[-1]):
+                merged[-1] = entity
+            continue
+        merged.append(entity)
 
-        if not overlap_found:
-            merged.append(entity)
-
-    # Re-sort by position
-    return sorted(merged, key=lambda e: e.start)
+    return merged

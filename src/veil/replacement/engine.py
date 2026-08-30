@@ -1,13 +1,13 @@
 """Unified replacement engine with strategy selection."""
 
 from enum import Enum
-from typing import Optional, Union
+from typing import Any
 
 from veil.core.mapper import MappingStore
-from veil.detection.entity import Entity, EntityType
-from veil.replacement.token import TokenReplacer, apply_replacements
-from veil.replacement.faker_gen import FakerReplacer, FAKER_AVAILABLE
+from veil.detection.entity import Entity
+from veil.replacement.faker_gen import FAKER_AVAILABLE, FakerReplacer
 from veil.replacement.semantic import SemanticReplacer
+from veil.replacement.token import TokenReplacer
 
 
 class ReplacementMode(Enum):
@@ -46,7 +46,7 @@ class ReplacementEngine:
         bracket_style: str = "square",
         # Faker options
         faker_locale: str = "en_US",
-        faker_seed: Optional[int] = None,
+        faker_seed: int | None = None,
         # Semantic options
         similarity_threshold: float = 0.6,
         use_semantic_fallback: bool = True,
@@ -77,7 +77,7 @@ class ReplacementEngine:
     def _create_replacer(
         self,
         mode: ReplacementMode,
-    ) -> Union[TokenReplacer, FakerReplacer, SemanticReplacer]:
+    ) -> TokenReplacer | FakerReplacer | SemanticReplacer:
         """Create replacer for specified mode.
 
         Args:
@@ -113,7 +113,7 @@ class ReplacementEngine:
         self,
         entity: Entity,
         mapping_store: MappingStore,
-        context: Optional[str] = None,
+        context: str | None = None,
     ) -> str:
         """Generate replacement for an entity.
 
@@ -125,8 +125,8 @@ class ReplacementEngine:
         Returns:
             Replacement string
         """
-        # Check existing mapping first
-        existing = mapping_store.get_replacement(entity.text)
+        # Check existing mapping first (partial names resolve to the same token)
+        existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
         if existing:
             return existing
 
@@ -161,11 +161,11 @@ class ReplacementEngine:
         if not entities:
             return text
 
-        # Sort entities by start position (descending) to replace from end
-        sorted_entities = sorted(entities, key=lambda e: e.start, reverse=True)
-
-        result = text
-        for entity in sorted_entities:
+        # Decide replacements in reading order so the first (usually fullest)
+        # mention of a name defines its token, then splice from the end so
+        # earlier offsets stay valid.
+        planned: list[tuple[Entity, str]] = []
+        for entity in sorted(entities, key=lambda e: e.start):
             # Get context around entity for semantic mode
             context = None
             if self.mode == ReplacementMode.SEMANTIC:
@@ -173,8 +173,16 @@ class ReplacementEngine:
                 context_end = min(len(text), entity.end + 50)
                 context = text[context_start:context_end]
 
-            # Generate replacement
+            # Generate replacement; a fake value that already occurs in the
+            # input (or is itself a mapped original) would corrupt
+            # reconstruction, so retry a few times before accepting it.
             replacement = self.replace(entity, mapping_store, context)
+            if not mapping_store.has_replacement(replacement):
+                for _ in range(5):
+                    if replacement not in text and not mapping_store.has_original(replacement):
+                        break
+                    mapping_store.block({replacement})
+                    replacement = self.replace(entity, mapping_store, context)
 
             # Add to mapping store if new
             if not mapping_store.has_original(entity.text):
@@ -184,11 +192,16 @@ class ReplacementEngine:
                     entity_type=entity.entity_type,
                     entity=entity,
                 )
+            planned.append((entity, replacement))
 
-            # Replace in text
-            result = result[:entity.start] + replacement + result[entity.end:]
-
-        return result
+        pieces: list[str] = []
+        cursor = 0
+        for entity, replacement in planned:
+            pieces.append(text[cursor:entity.start])
+            pieces.append(replacement)
+            cursor = entity.end
+        pieces.append(text[cursor:])
+        return "".join(pieces)
 
     def set_mode(self, mode: ReplacementMode) -> None:
         """Change the replacement mode.
@@ -208,13 +221,13 @@ class ReplacementEngine:
         if isinstance(self.replacer, SemanticReplacer):
             self.replacer.clear_used()
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Get statistics about the replacement engine.
 
         Returns:
             Dictionary with engine statistics
         """
-        stats = {
+        stats: dict[str, Any] = {
             "mode": self.mode.value,
             "replacer_type": type(self.replacer).__name__,
         }
@@ -236,7 +249,7 @@ class ReplacementEngine:
 
 def create_engine(
     mode: str = "token",
-    **kwargs,
+    **kwargs: Any,
 ) -> ReplacementEngine:
     """Factory function to create a replacement engine.
 

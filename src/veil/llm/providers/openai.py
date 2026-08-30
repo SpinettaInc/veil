@@ -1,6 +1,7 @@
 """OpenAI LLM provider."""
 
-from typing import Generator, List, Optional
+from collections.abc import Generator
+from typing import Any, cast
 
 try:
     from openai import OpenAI
@@ -58,7 +59,7 @@ class OpenAIProvider(LLMProvider):
         super().__init__(config)
 
         # Initialize client
-        client_kwargs = {"api_key": config.api_key}
+        client_kwargs: dict[str, Any] = {"api_key": config.api_key}
         if config.base_url:
             client_kwargs["base_url"] = config.base_url
 
@@ -69,13 +70,13 @@ class OpenAIProvider(LLMProvider):
         return "OpenAI"
 
     @property
-    def available_models(self) -> List[str]:
+    def available_models(self) -> list[str]:
         return self.DEFAULT_MODELS
 
     def chat(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> LLMResponse:
         """Send a chat request to OpenAI.
 
@@ -87,7 +88,7 @@ class OpenAIProvider(LLMProvider):
             LLMResponse with the model's response
         """
         # Prepare messages
-        api_messages = [m.to_dict() for m in messages]
+        api_messages: list[Any] = [m.to_dict() for m in messages]
 
         # Merge config with kwargs
         temperature = kwargs.get("temperature", self.config.temperature)
@@ -104,7 +105,7 @@ class OpenAIProvider(LLMProvider):
 
         # Extract response
         content = response.choices[0].message.content or ""
-        usage = {}
+        usage: dict[str, int] = {}
         if response.usage:
             usage = {
                 "prompt_tokens": response.usage.prompt_tokens,
@@ -121,8 +122,8 @@ class OpenAIProvider(LLMProvider):
 
     def chat_stream(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> Generator[str, None, None]:
         """Stream a chat response from OpenAI.
 
@@ -133,7 +134,7 @@ class OpenAIProvider(LLMProvider):
         Yields:
             Chunks of the response text
         """
-        api_messages = [m.to_dict() for m in messages]
+        api_messages: list[Any] = [m.to_dict() for m in messages]
 
         temperature = kwargs.get("temperature", self.config.temperature)
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
@@ -147,7 +148,7 @@ class OpenAIProvider(LLMProvider):
             **self.config.extra,
         )
 
-        for chunk in stream:
+        for chunk in cast(Any, stream):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 

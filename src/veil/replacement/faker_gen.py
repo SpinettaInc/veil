@@ -1,6 +1,5 @@
 """Faker-based replacement strategy for generating realistic fake data."""
 
-from typing import Optional
 import random
 
 try:
@@ -32,7 +31,7 @@ class FakerReplacer:
     def __init__(
         self,
         locale: str = "en_US",
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> None:
         """Initialize the Faker replacer.
 
@@ -272,7 +271,7 @@ class FakerReplacer:
 
 def create_faker_replacer(
     locale: str = "en_US",
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> FakerReplacer:
     """Factory function to create a Faker replacer.
 

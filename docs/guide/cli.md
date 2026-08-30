@@ -36,7 +36,7 @@ veil anonymize [OPTIONS] [TEXT]
 | `--input`, `-i` | Input file to anonymize | - |
 | `--output`, `-o` | Output file for anonymized text | - |
 | `--mapping`, `-m` | Show the mapping table | False |
-| `--profile`, `-p` | Detection profile: paranoid, balanced, minimal | balanced |
+| `--profile`, `-p` | Detection profile: paranoid, balanced, minimal, or a path to a profile YAML | balanced |
 | `--mode`, `-r` | Replacement mode: token, faker, semantic | token |
 | `--seed` | Random seed for faker mode | - |
 | `--hybrid`, `-H` | Use hybrid detection | False |
@@ -60,6 +60,7 @@ veil anonymize --input document.txt --output anonymized.txt
 
 # Paranoid profile
 veil anonymize "text" --profile paranoid
+veil anonymize "text" --profile ./corp.yaml     # custom profile (see Profiles guide)
 
 # Faker replacement
 veil anonymize "John Smith" --mode faker

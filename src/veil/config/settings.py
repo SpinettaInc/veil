@@ -6,9 +6,9 @@ API keys, preferences, and LLM settings.
 
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 def get_config_dir() -> Path:
@@ -108,7 +108,7 @@ class AppSettings:
     ui: UISettings = field(default_factory=UISettings)
     system_prompt: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert settings to dictionary."""
         return {
             "llm": asdict(self.llm),
@@ -118,7 +118,7 @@ class AppSettings:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AppSettings":
+    def from_dict(cls, data: dict[str, Any]) -> "AppSettings":
         """Create settings from dictionary."""
         return cls(
             llm=LLMSettings(**data.get("llm", {})),
@@ -127,7 +127,7 @@ class AppSettings:
             system_prompt=data.get("system_prompt", ""),
         )
 
-    def save(self, path: Optional[Path] = None) -> None:
+    def save(self, path: Path | None = None) -> None:
         """Save settings to file.
 
         Args:
@@ -140,7 +140,7 @@ class AppSettings:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> "AppSettings":
+    def load(cls, path: Path | None = None) -> "AppSettings":
         """Load settings from file.
 
         Args:
@@ -162,7 +162,7 @@ class AppSettings:
             # Return defaults if config is corrupted
             return cls()
 
-    def update_llm(self, **kwargs) -> None:
+    def update_llm(self, **kwargs: Any) -> None:
         """Update LLM settings.
 
         Args:
@@ -172,7 +172,7 @@ class AppSettings:
             if hasattr(self.llm, key):
                 setattr(self.llm, key, value)
 
-    def update_privacy(self, **kwargs) -> None:
+    def update_privacy(self, **kwargs: Any) -> None:
         """Update privacy settings.
 
         Args:
@@ -182,7 +182,7 @@ class AppSettings:
             if hasattr(self.privacy, key):
                 setattr(self.privacy, key, value)
 
-    def update_ui(self, **kwargs) -> None:
+    def update_ui(self, **kwargs: Any) -> None:
         """Update UI settings.
 
         Args:
@@ -194,7 +194,7 @@ class AppSettings:
 
 
 # Singleton instance
-_settings: Optional[AppSettings] = None
+_settings: AppSettings | None = None
 
 
 def get_settings() -> AppSettings:

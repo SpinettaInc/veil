@@ -4,8 +4,8 @@ import pytest
 
 from veil.integrations.guardrails import (
     GUARDRAILS_AVAILABLE,
-    VeilPIIValidator,
     VeilAnonymizer,
+    VeilPIIValidator,
     create_veil_guard,
 )
 

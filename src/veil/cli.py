@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -10,8 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from veil.core.pipeline import VeilPipeline
-from veil.detection.entity import EntityType
-from veil.weighting.config import DetectionProfile
+from veil.weighting.config import DetectionProfile, WeightConfig, load_profile
 
 # Create Typer app
 app = typer.Typer(
@@ -24,13 +23,14 @@ app = typer.Typer(
 console = Console()
 
 # Global pipeline instance for interactive sessions
-_pipeline: Optional[VeilPipeline] = None
+_pipeline: VeilPipeline | None = None
 
 
 def get_pipeline(
     use_ner: bool = True,
     use_patterns: bool = True,
     profile: DetectionProfile = DetectionProfile.BALANCED,
+    weight_config: "WeightConfig | None" = None,
 ) -> VeilPipeline:
     """Get or create the global pipeline instance."""
     global _pipeline
@@ -39,6 +39,7 @@ def get_pipeline(
             use_ner=use_ner,
             use_patterns=use_patterns,
             profile=profile,
+            weight_config=weight_config,
         )
     return _pipeline
 
@@ -52,19 +53,29 @@ def parse_profile(profile_str: str) -> DetectionProfile:
         raise typer.BadParameter(f"Invalid profile. Choose from: {valid}")
 
 
+def parse_profile_or_path(profile_str: str) -> "tuple[DetectionProfile, WeightConfig | None]":
+    """Accept a built-in profile name or a path to a profile YAML file."""
+    try:
+        return parse_profile(profile_str), None
+    except typer.BadParameter:
+        if Path(profile_str).exists():
+            return DetectionProfile.BALANCED, load_profile(profile_str)
+        raise
+
+
 @app.command()
 def anonymize(
-    text: Optional[str] = typer.Argument(
+    text: str | None = typer.Argument(
         None,
         help="Text to anonymize (or use --input for file)",
     ),
-    input_file: Optional[Path] = typer.Option(
+    input_file: Path | None = typer.Option(
         None,
         "--input",
         "-i",
         help="Input file to anonymize",
     ),
-    output_file: Optional[Path] = typer.Option(
+    output_file: Path | None = typer.Option(
         None,
         "--output",
         "-o",
@@ -103,7 +114,7 @@ def anonymize(
         "-r",
         help="Replacement mode: token, faker, semantic",
     ),
-    faker_seed: Optional[int] = typer.Option(
+    faker_seed: int | None = typer.Option(
         None,
         "--seed",
         help="Random seed for faker mode (for reproducibility)",
@@ -157,7 +168,7 @@ def anonymize(
         raise typer.Exit(0)
 
     # Parse profile
-    detection_profile = parse_profile(profile)
+    detection_profile, weight_config = parse_profile_or_path(profile)
 
     # Validate replacement mode
     valid_modes = ["token", "faker", "semantic"]
@@ -176,6 +187,7 @@ def anonymize(
             use_patterns=not no_patterns,
             use_presidio=use_presidio,
             profile=detection_profile,
+            weight_config=weight_config,
             use_weighting=not no_weighting,
             replacement_mode=replacement_mode.lower(),
             faker_seed=faker_seed,
@@ -219,7 +231,7 @@ def anonymize(
 
         if result.entity_count > 0:
             console.print(
-                f"\n[dim]Detected {result.entity_count} entities (profile: {detection_profile.value}, mode: {replacement_mode.lower()})[/dim]"
+                f"\n[dim]Detected {result.entity_count} entities (profile: {detection_profile.value}, mode: {replacement_mode.lower()})[/dim]"  # noqa: E501
             )
 
 
@@ -262,7 +274,7 @@ def detect(
         veil detect "John Smith, SSN 123-45-6789, works at Acme Corp"
         veil detect "text" --hybrid  # Use all detection sources
     """
-    detection_profile = parse_profile(profile)
+    detection_profile, weight_config = parse_profile_or_path(profile)
     detection_mode = "hybrid" if (hybrid or presidio) else "standard"
 
     pipeline = VeilPipeline(
@@ -270,6 +282,7 @@ def detect(
         use_patterns=not no_patterns,
         use_presidio=presidio,
         profile=detection_profile,
+        weight_config=weight_config,
         use_weighting=False,  # Show all detected, not filtered
         detection_mode=detection_mode,
     )
@@ -329,12 +342,13 @@ def score(
     Example:
         veil score "Patient John Smith, SSN 123-45-6789"
     """
-    detection_profile = parse_profile(profile)
+    detection_profile, weight_config = parse_profile_or_path(profile)
 
     pipeline = VeilPipeline(
         use_ner=not no_ner,
         use_patterns=not no_patterns,
         profile=detection_profile,
+        weight_config=weight_config,
     )
 
     scores = pipeline.score_entities(text)
@@ -378,7 +392,7 @@ def score(
 @app.command()
 def reconstruct(
     text: str = typer.Argument(..., help="Anonymized text to reconstruct"),
-    mapping_file: Optional[Path] = typer.Option(
+    mapping_file: Path | None = typer.Option(
         None,
         "--mapping",
         "-m",
@@ -438,40 +452,40 @@ def stats() -> None:
     console.print("\n[bold]Detector:[/bold]")
     console.print(f"  Mode: {det.get('mode', 'standard')}")
     console.print(f"  NER enabled: {det.get('spacy_enabled', det.get('ner_enabled', False))}")
-    if det.get('ner_model') or det.get('spacy_model'):
+    if det.get("ner_model") or det.get("spacy_model"):
         console.print(f"  NER model: {det.get('ner_model') or det.get('spacy_model')}")
     console.print(f"  Presidio enabled: {det.get('presidio_enabled', False)}")
     console.print(f"  Patterns enabled: {det.get('patterns_enabled', False)}")
     console.print(f"  Pattern count: {det.get('pattern_count', 0)}")
-    if det.get('agreement_boost'):
+    if det.get("agreement_boost"):
         console.print(f"  Agreement boost: {det['agreement_boost']}")
 
     # Profile
     console.print(f"\n[bold]Profile:[/bold] {stats.get('profile', 'balanced')}")
     console.print(f"  Weighting enabled: {stats.get('weighting_enabled', True)}")
 
-    if 'scorer' in stats:
-        scorer = stats['scorer']
+    if "scorer" in stats:
+        scorer = stats["scorer"]
         console.print(f"  Threshold: {scorer['threshold']}")
         console.print(f"  Rarity factor: {scorer['rarity_factor']}")
 
     # Replacement mode
-    if 'replacement' in stats:
-        repl = stats['replacement']
-        console.print(f"\n[bold]Replacement:[/bold]")
+    if "replacement" in stats:
+        repl = stats["replacement"]
+        console.print("\n[bold]Replacement:[/bold]")
         console.print(f"  Mode: {repl.get('mode', 'token')}")
-        if repl.get('bracket_style'):
+        if repl.get("bracket_style"):
             console.print(f"  Bracket style: {repl['bracket_style']}")
-        if repl.get('locale'):
+        if repl.get("locale"):
             console.print(f"  Faker locale: {repl['locale']}")
 
     # Mapping stats
     maps = stats["mappings"]
     console.print("\n[bold]Mappings:[/bold]")
     console.print(f"  Total mappings: {maps['total_mappings']}")
-    if maps.get('by_type'):
+    if maps.get("by_type"):
         console.print("  By type:")
-        for entity_type, count in maps['by_type'].items():
+        for entity_type, count in maps["by_type"].items():
             console.print(f"    {entity_type}: {count}")
 
 
@@ -483,6 +497,46 @@ def version() -> None:
     console.print(f"[bold]Veil[/bold] version {__version__}")
     console.print("Privacy-preserving proxy for LLMs")
     console.print("\n[dim]Profiles: paranoid, balanced, minimal[/dim]")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address (use 0.0.0.0 to expose)"),
+    port: int = typer.Option(8787, help="TCP port"),
+    profile: str = typer.Option("balanced", "--profile", "-p", help="Profile name or YAML path"),
+    detection_mode: str = typer.Option("standard", help="standard or hybrid"),
+    session_ttl: float = typer.Option(
+        3600.0, help="Seconds of inactivity before a session expires"
+    ),
+    audit: Path | None = typer.Option(None, "--audit", help="Append JSONL audit log here"),
+) -> None:
+    """Run the HTTP API server (POST /anonymize, POST /reconstruct, GET /health)."""
+    from veil.audit import AuditLogger
+    from veil.server import VeilService, create_server
+
+    detection_profile, weight_config = parse_profile_or_path(profile)
+    logger = AuditLogger(audit) if audit else None
+    service = VeilService(
+        pipeline=VeilPipeline(
+            profile=detection_profile,
+            weight_config=weight_config,
+            detection_mode=detection_mode,
+            audit=logger,
+        ),
+        session_ttl=session_ttl,
+        audit=logger,
+    )
+    httpd = create_server(host, port, service=service)
+    console.print(f"[green]Veil API listening on http://{host}:{httpd.server_address[1]}[/green]")
+    console.print("  POST /anonymize  POST /reconstruct  GET /health  (Ctrl+C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+        if logger:
+            logger.close()
 
 
 @app.command(name="app")
@@ -530,7 +584,7 @@ def launch_desktop_app(
 
 def _show_mapping_table(
     replacements: dict[str, str],
-    entities: list,
+    entities: list[Any],
 ) -> None:
     """Display mapping table."""
     table = Table(title="Mappings")

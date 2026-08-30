@@ -1,12 +1,12 @@
 """Core entity detection pipeline combining multiple detection methods."""
 
 from enum import Enum
-from typing import Optional
+from typing import Any
 
 from veil.detection.entity import Entity, EntityType, merge_overlapping_entities
-from veil.detection.ner import SpacyNER, SPACY_AVAILABLE
+from veil.detection.hybrid import HybridDetector
+from veil.detection.ner import SPACY_AVAILABLE, SpacyNER
 from veil.detection.patterns import PatternDetector
-from veil.detection.hybrid import HybridDetector, DetectorConfig
 from veil.detection.presidio import PRESIDIO_AVAILABLE
 
 
@@ -15,6 +15,16 @@ class DetectionMode(str, Enum):
 
     STANDARD = "standard"  # spaCy + patterns (original behavior)
     HYBRID = "hybrid"  # spaCy + Presidio + patterns with voting
+
+
+class DetectionUnavailableError(RuntimeError):
+    """A requested detection backend (spaCy model, Presidio) is not available.
+
+    Raised instead of silently degrading, because an anonymizer that quietly
+    stops detecting names would leak the very data it exists to protect.
+    Construct the detector with ``strict=False`` to degrade instead; the
+    result is then flagged via ``EntityDetector.degraded``.
+    """
 
 
 class EntityDetector:
@@ -40,10 +50,11 @@ class EntityDetector:
         use_ner: bool = True,
         use_patterns: bool = True,
         use_presidio: bool = False,
-        spacy_model: Optional[str] = None,
+        spacy_model: str | None = None,
         min_confidence: float = 0.0,
         mode: str = "standard",
         agreement_boost: float = 0.15,
+        strict: bool = True,
     ) -> None:
         """Initialize the entity detector.
 
@@ -56,9 +67,17 @@ class EntityDetector:
             mode: Detection mode ("standard" or "hybrid")
             agreement_boost: Confidence boost when detectors agree (hybrid mode)
 
+            strict: Raise DetectionUnavailableError when a requested backend
+                cannot be loaded instead of silently continuing without it
+
         Raises:
             ValueError: If all detection methods are disabled
+            DetectionUnavailableError: If strict and a backend is unavailable
         """
+        self.strict = strict
+        self.degraded = False
+        self.degradation_reasons: list[str] = []
+
         # Determine detection mode
         try:
             self.mode = DetectionMode(mode.lower())
@@ -75,9 +94,9 @@ class EntityDetector:
         self.use_presidio = use_presidio or self.mode == DetectionMode.HYBRID
 
         # Initialize detectors based on mode
-        self.ner_detector: Optional[SpacyNER] = None
-        self.pattern_detector: Optional[PatternDetector] = None
-        self.hybrid_detector: Optional[HybridDetector] = None
+        self.ner_detector: SpacyNER | None = None
+        self.pattern_detector: PatternDetector | None = None
+        self.hybrid_detector: HybridDetector | None = None
 
         if self.mode == DetectionMode.HYBRID:
             # Use hybrid detector
@@ -91,9 +110,11 @@ class EntityDetector:
                     agreement_boost=agreement_boost,
                 )
             except Exception as e:
-                print(f"Warning: Could not initialize hybrid detector: {e}")
-                print("Falling back to standard mode")
+                self._degrade(f"Could not initialize hybrid detector: {e}; using standard mode")
                 self.mode = DetectionMode.STANDARD
+            else:
+                if self.use_presidio and not PRESIDIO_AVAILABLE:
+                    self._degrade("Presidio requested but presidio-analyzer is not installed")
 
         if self.mode == DetectionMode.STANDARD:
             # Standard mode: separate detectors
@@ -108,14 +129,21 @@ class EntityDetector:
                             filter_false_positives=True,
                         )
                     except OSError as e:
-                        print(f"Warning: Could not load spaCy model: {e}")
+                        self._degrade(f"Could not load spaCy model: {e}")
                         self.use_ner = False
                 else:
-                    print("Warning: spaCy not available, NER disabled")
+                    self._degrade("spaCy is not installed; NER disabled")
                     self.use_ner = False
 
             if use_patterns:
                 self.pattern_detector = PatternDetector()
+
+    def _degrade(self, reason: str) -> None:
+        if self.strict:
+            raise DetectionUnavailableError(reason)
+        print(f"Warning: {reason}")
+        self.degraded = True
+        self.degradation_reasons.append(reason)
 
     def detect(self, text: str) -> list[Entity]:
         """Detect all entities in text.
@@ -149,16 +177,13 @@ class EntityDetector:
             pattern_entities = self.pattern_detector.detect(text)
             all_entities.extend(pattern_entities)
 
-        # Filter by minimum confidence
+        return self.finalize(all_entities, text)
+
+    def finalize(self, entities: list[Entity], text: str) -> list[Entity]:
+        """Confidence filter + overlap merge shared by single and batch detection."""
         if self.min_confidence > 0:
-            all_entities = [
-                e for e in all_entities if e.confidence >= self.min_confidence
-            ]
-
-        # Merge overlapping entities
-        merged = merge_overlapping_entities(all_entities)
-
-        return merged
+            entities = [e for e in entities if e.confidence >= self.min_confidence]
+        return merge_overlapping_entities(entities)
 
     def detect_by_type(
         self,
@@ -219,7 +244,7 @@ class EntityDetector:
 
         return list(types)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Get statistics about the detector configuration.
 
         Returns:

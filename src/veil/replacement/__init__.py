@@ -1,20 +1,20 @@
 """Replacement strategies for anonymizing entities."""
 
-from veil.replacement.token import TokenReplacer, apply_replacements
 from veil.replacement.engine import ReplacementEngine, ReplacementMode, create_engine
+from veil.replacement.token import TokenReplacer, apply_replacements
 
 # Optional imports (require additional dependencies)
 try:
     from veil.replacement.faker_gen import FakerReplacer, create_faker_replacer
 except ImportError:
-    FakerReplacer = None
-    create_faker_replacer = None
+    FakerReplacer = None  # type: ignore[assignment,misc]
+    create_faker_replacer = None  # type: ignore[assignment]
 
 try:
     from veil.replacement.semantic import SemanticReplacer, create_semantic_replacer
 except ImportError:
-    SemanticReplacer = None
-    create_semantic_replacer = None
+    SemanticReplacer = None  # type: ignore[assignment,misc]
+    create_semantic_replacer = None  # type: ignore[assignment]
 
 __all__ = [
     "TokenReplacer",

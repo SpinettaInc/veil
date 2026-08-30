@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ".[dev,faker,rarity]" presidio-analyzer
+          python -m spacy download en_core_web_sm
+      - name: Lint
+        run: ruff check src/ tests/ benchmarks/
+      - name: Tests
+        run: pytest -q -m "not desktop"
+      - name: Precision benchmark (standard)
+        run: python benchmarks/run.py --corpus all --min-f1 0.95
+      - name: Precision benchmark (hybrid)
+        run: python benchmarks/run.py --corpus all --mode hybrid --min-f1 0.95
+      - name: Round-trip fuzz
+        run: python benchmarks/fuzz.py --trials 100

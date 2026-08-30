@@ -1,17 +1,17 @@
 """Weighting modules for scoring entity sensitivity."""
 
 from veil.weighting.config import (
-    WeightConfig,
-    DetectionProfile,
     ContextPattern,
-    get_profile_config,
-    get_paranoid_config,
+    DetectionProfile,
+    WeightConfig,
     get_balanced_config,
     get_minimal_config,
+    get_paranoid_config,
+    get_profile_config,
 )
-from veil.weighting.scorer import PrivacyScorer, PrivacyScore, score_text
-from veil.weighting.tfidf import DocumentStats, RarityScorer, GlobalRarityScorer
 from veil.weighting.context import ContextAnalyzer, ContextMatch, RelationshipAnalyzer
+from veil.weighting.scorer import PrivacyScore, PrivacyScorer, score_text
+from veil.weighting.tfidf import DocumentStats, GlobalRarityScorer, RarityScorer
 
 __all__ = [
     # Config

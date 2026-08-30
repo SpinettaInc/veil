@@ -57,6 +57,15 @@ pip install -e ".[embeddings]"
 
 Includes: `gensim`
 
+### Corpus-based rarity (optional)
+
+```bash
+pip install -e ".[rarity]"
+```
+
+Installs `wordfreq`; rare names then score higher than common words even in
+short texts. Without it, rarity is estimated from the document alone.
+
 ### Full Installation
 
 Install all optional dependencies:

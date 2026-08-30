@@ -7,7 +7,6 @@ sensitive than just "John Smith").
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from veil.detection.entity import Entity
 from veil.weighting.config import ContextPattern, WeightConfig
@@ -226,13 +225,40 @@ class RelationshipAnalyzer:
 
         return relationships
 
+    MAX_BOOST = 0.3
+
+    def boosts_by_entity(
+        self,
+        entities: list[Entity],
+        full_text: str,
+    ) -> dict[int, float]:
+        """Compute the relationship boost for every entity in one pass.
+
+        Runs ``find_relationships`` once (O(n)) instead of once per entity,
+        which made scoring a long document O(n²).
+
+        Args:
+            entities: All entities in the document
+            full_text: Full document text
+
+        Returns:
+            Mapping of ``id(entity)`` to its capped relationship boost
+        """
+        totals: dict[int, float] = {}
+        for e1, e2, _rel_type, boost in self.find_relationships(entities, full_text):
+            totals[id(e1)] = totals.get(id(e1), 0.0) + boost
+            totals[id(e2)] = totals.get(id(e2), 0.0) + boost
+        return {k: min(self.MAX_BOOST, v) for k, v in totals.items()}
+
     def calculate_relationship_boost(
         self,
         entity: Entity,
         all_entities: list[Entity],
         full_text: str,
     ) -> float:
-        """Calculate boost from entity relationships.
+        """Calculate boost from entity relationships for a single entity.
+
+        Prefer ``boosts_by_entity`` when scoring many entities of one document.
 
         Args:
             entity: Entity to calculate boost for
@@ -242,11 +268,4 @@ class RelationshipAnalyzer:
         Returns:
             Boost amount from relationships
         """
-        relationships = self.find_relationships(all_entities, full_text)
-
-        total_boost = 0.0
-        for e1, e2, rel_type, boost in relationships:
-            if e1 == entity or e2 == entity:
-                total_boost += boost
-
-        return min(0.3, total_boost)  # Cap relationship boost
+        return self.boosts_by_entity(all_entities, full_text).get(id(entity), 0.0)

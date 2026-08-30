@@ -4,8 +4,9 @@ Patterns inspired by Microsoft Presidio and common PII detection rules.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any
 
 from veil.detection.entity import Entity, EntityType
 
@@ -21,14 +22,22 @@ class Pattern:
         confidence: Base confidence score for matches
         validator: Optional function to validate matches
         context_patterns: Patterns that boost confidence when found nearby
+        context_boost: Confidence added when a context pattern matches
+        requires_context: Drop the match entirely unless a context pattern
+            matches nearby. Use for loose patterns (any 8+ digit number, any
+            5-digit number) that are only meaningful with a cue like
+            "account" or "zip".
     """
 
     name: str
     entity_type: EntityType
     regex: re.Pattern[str]
     confidence: float = 0.9
-    validator: Optional[Callable[[str], bool]] = None
+    validator: Callable[[str], bool] | None = None
     context_patterns: list[re.Pattern[str]] | None = None
+    context_boost: float = 0.1
+    requires_context: bool = False
+    label: str | None = None  # user-facing type name for CUSTOM patterns
 
 
 # Validation functions for specific patterns
@@ -83,6 +92,16 @@ def validate_email(email: str) -> bool:
     if ".." in email:
         return False
     return "@" in email and "." in email.split("@")[-1]
+
+
+def validate_iban(iban: str) -> bool:
+    """Validate an IBAN with the ISO 7064 mod-97 check."""
+    compact = re.sub(r"\s", "", iban).upper()
+    if not 15 <= len(compact) <= 34 or not compact[:2].isalpha() or not compact[2:4].isdigit():
+        return False
+    rearranged = compact[4:] + compact[:4]
+    numeric = "".join(str(int(ch, 36)) for ch in rearranged)
+    return int(numeric) % 97 == 1
 
 
 def validate_phone(phone: str) -> bool:
@@ -147,10 +166,11 @@ PATTERNS: list[Pattern] = [
         name="credit_card_formatted",
         entity_type=EntityType.CREDIT_CARD,
         regex=re.compile(
-            r"\b\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}\b"
+            r"\b\d{4}[-\s]\d{4,6}[-\s]\d{4,5}(?:[-\s]\d{3,4})?\b"
         ),
-        confidence=0.75,
-        validator=lambda x: validate_luhn(re.sub(r"[-\s]", "", x)),
+        confidence=0.8,
+        validator=lambda x: 13 <= len(re.sub(r"[-\s]", "", x)) <= 19
+        and validate_luhn(re.sub(r"[-\s]", "", x)),
         context_patterns=[
             re.compile(r"credit\s*card", re.IGNORECASE),
             re.compile(r"card\s*number", re.IGNORECASE),
@@ -161,8 +181,8 @@ PATTERNS: list[Pattern] = [
         name="phone_us",
         entity_type=EntityType.PHONE,
         regex=re.compile(
-            r"\b(?:\+?1[-.\s]?)?"
-            r"(?:\([0-9]{3}\)|[0-9]{3})[-.\s]?"
+            r"(?<![\w.+-])(?:\+?1[-.\s]?)?"
+            r"(?:\([0-9]{3}\)\s?|[0-9]{3})[-.\s]?"
             r"[0-9]{3}[-.\s]?"
             r"[0-9]{4}\b"
         ),
@@ -178,7 +198,7 @@ PATTERNS: list[Pattern] = [
         name="phone_international",
         entity_type=EntityType.PHONE,
         regex=re.compile(
-            r"\b\+[1-9]\d{6,14}\b"
+            r"(?<![\w+])\+[1-9]\d{6,14}\b"
         ),
         confidence=0.85,
         validator=validate_phone,
@@ -221,13 +241,14 @@ PATTERNS: list[Pattern] = [
         name="phone_generic",
         entity_type=EntityType.PHONE,
         regex=re.compile(
-            r"\b\(?\d{2,4}\)?[-.\s]?\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{0,4}\b"
+            r"(?<![\w.+-])\(?\d{2,4}\)?[-.\s]\d{2,4}[-.\s]?\d{3,4}(?:[-.\s]?\d{1,4})?\b"
         ),
         confidence=0.7,
         validator=validate_phone,
         context_patterns=[
             re.compile(r"phone|tel|call|mobile|cell|contact|fax|連絡|電話", re.IGNORECASE),
         ],
+        requires_context=True,
     ),
     # IPv4 Addresses
     Pattern(
@@ -266,10 +287,10 @@ PATTERNS: list[Pattern] = [
         name="iban",
         entity_type=EntityType.IBAN,
         regex=re.compile(
-            r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}(?:[A-Z0-9]?){0,16}\b",
-            re.IGNORECASE,
+            r"\b[A-Z]{2}[0-9]{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b",
         ),
-        confidence=0.85,
+        confidence=0.9,
+        validator=validate_iban,
         context_patterns=[
             re.compile(r"IBAN|bank\s*account|account\s*number", re.IGNORECASE),
         ],
@@ -283,6 +304,7 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"passport", re.IGNORECASE),
         ],
+        context_boost=0.3,
     ),
     # US Driver's License (generic pattern - varies by state)
     Pattern(
@@ -293,6 +315,8 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"driver'?s?\s*licen[cs]e|DL\s*#?|license\s*#", re.IGNORECASE),
         ],
+        context_boost=0.4,
+        requires_context=True,
     ),
     # Medical Record Number (generic pattern)
     Pattern(
@@ -313,6 +337,7 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"address|postal|zip|〒|住所", re.IGNORECASE),
         ],
+        requires_context=True,
     ),
     # US ZIP codes
     Pattern(
@@ -323,17 +348,31 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"address|zip|postal|city|state", re.IGNORECASE),
         ],
+        context_boost=0.2,
+        requires_context=True,
     ),
     # Date patterns (YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY)
     Pattern(
         name="date_iso",
         entity_type=EntityType.DATE,
         regex=re.compile(
-            r"\b(?:19|20)[0-9]{2}[-/][0-1]?[0-9][-/][0-3]?[0-9]\b"
+            r"\b(?:19|20)[0-9]{2}[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12][0-9]|3[01])(?!\d)"
         ),
         confidence=0.85,
         context_patterns=[
             re.compile(r"date|born|dob|birthday|expire|issued", re.IGNORECASE),
+        ],
+    ),
+    # Date patterns with a four-digit year last (DD/MM/YYYY or MM/DD/YYYY)
+    Pattern(
+        name="date_dmy",
+        entity_type=EntityType.DATE,
+        regex=re.compile(
+            r"\b(?:0?[1-9]|[12][0-9]|3[01])[-/.](?:0?[1-9]|[12][0-9]|3[01])[-/.](?:19|20)[0-9]{2}\b"
+        ),
+        confidence=0.85,
+        context_patterns=[
+            re.compile(r"date|born|dob|birthday|expire|issued|admitted", re.IGNORECASE),
         ],
     ),
     # Bank account numbers (generic)
@@ -345,6 +384,8 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"account|bank|acct|routing|swift", re.IGNORECASE),
         ],
+        context_boost=0.4,
+        requires_context=True,
     ),
     # Street addresses (generic patterns)
     Pattern(
@@ -368,8 +409,49 @@ PATTERNS: list[Pattern] = [
         context_patterns=[
             re.compile(r"address|住所|cho|chome|丁目|番地", re.IGNORECASE),
         ],
+        requires_context=True,
     ),
 ]
+
+
+def pattern_from_dict(spec: dict[str, Any]) -> Pattern:
+    """Build a Pattern from a profile-YAML ``custom_patterns`` entry.
+
+    Keys: ``name`` (required), ``regex`` (required), ``entity_type`` (an
+    EntityType name; unknown names become CUSTOM and the given label is kept
+    in ``metadata``), ``confidence``, ``context`` (list of regexes),
+    ``context_boost``, ``requires_context``.
+    """
+    name = spec["name"]
+    label = str(spec.get("entity_type", "CUSTOM")).upper()
+    try:
+        entity_type = EntityType(label)
+    except ValueError:
+        entity_type = EntityType.CUSTOM
+    context = spec.get("context") or []
+    return Pattern(
+        name=name,
+        entity_type=entity_type,
+        regex=re.compile(spec["regex"], re.IGNORECASE if spec.get("ignore_case", False) else 0),
+        confidence=float(spec.get("confidence", 0.9)),
+        context_patterns=[re.compile(c, re.IGNORECASE) for c in context] or None,
+        context_boost=float(spec.get("context_boost", 0.1)),
+        requires_context=bool(spec.get("requires_context", False)),
+        label=label if entity_type == EntityType.CUSTOM else None,
+    )
+
+
+def _mask_tokens(text: str) -> str:
+    """Blank out token-shaped strings, preserving offsets."""
+    from veil.core.mapper import token_spans  # local import: mapper imports entity
+
+    spans = token_spans(text)
+    if not spans:
+        return text
+    chars = list(text)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars)
 
 
 class PatternDetector:
@@ -394,7 +476,7 @@ class PatternDetector:
             patterns: Custom patterns to use. If None, uses default PATTERNS.
             context_window: Window size for checking context patterns.
         """
-        self.patterns = patterns if patterns is not None else PATTERNS
+        self.patterns = list(patterns) if patterns is not None else list(PATTERNS)
         self.context_window = context_window
 
     def detect(self, text: str) -> list[Entity]:
@@ -410,6 +492,9 @@ class PatternDetector:
             return []
 
         entities: list[Entity] = []
+        # Context cues must come from the user's words, not from tokens left by
+        # an earlier pass ("[IP_ADDRESS_1]" must not make "30000" look like a ZIP)
+        context_text = _mask_tokens(text)
 
         for pattern in self.patterns:
             for match in pattern.regex.finditer(text):
@@ -424,12 +509,15 @@ class PatternDetector:
                 if pattern.context_patterns:
                     context_start = max(0, match.start() - self.context_window)
                     context_end = min(len(text), match.end() + self.context_window)
-                    context = text[context_start:context_end]
+                    context = context_text[context_start:context_end]
 
-                    for ctx_pattern in pattern.context_patterns:
-                        if ctx_pattern.search(context):
-                            confidence = min(1.0, confidence + 0.1)
-                            break
+                    has_context = any(
+                        ctx_pattern.search(context) for ctx_pattern in pattern.context_patterns
+                    )
+                    if has_context:
+                        confidence = min(1.0, confidence + pattern.context_boost)
+                    elif pattern.requires_context:
+                        continue
 
                 entity = Entity(
                     text=matched_text,
@@ -439,7 +527,7 @@ class PatternDetector:
                     confidence=confidence,
                     source="pattern",
                     context=self._get_context(text, match.start(), match.end()),
-                    metadata={"pattern_name": pattern.name},
+                    metadata={"pattern_name": pattern.name, "label": pattern.label},
                 )
                 entities.append(entity)
 

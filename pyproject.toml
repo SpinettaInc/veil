@@ -39,6 +39,9 @@ embeddings = [
 faker = [
     "faker>=20.0.0",
 ]
+rarity = [
+    "wordfreq>=3.0.0",
+]
 openai = [
     "openai>=1.0.0",
 ]
@@ -58,6 +61,7 @@ full = [
     "openai>=1.0.0",
     "anthropic>=0.18.0",
     "gradio>=4.0.0",
+    "wordfreq>=3.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -84,6 +88,10 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Labeled corpus lines are long by nature; P/R/F1 are conventional metric names.
+"benchmarks/*" = ["E501", "N806"]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true
@@ -93,3 +101,6 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=veil --cov-report=term-missing"
+markers = [
+    "desktop: Gradio desktop app tests (slow, optional dependency); deselect with -m 'not desktop'",
+]

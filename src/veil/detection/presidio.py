@@ -3,19 +3,41 @@
 Wraps Microsoft Presidio for enhanced entity detection.
 """
 
-from typing import Optional
 
 try:
     from presidio_analyzer import AnalyzerEngine, RecognizerResult
-    from presidio_analyzer.nlp_engine import NlpEngineProvider
+    from presidio_analyzer.nlp_engine import SpacyNlpEngine
 
     PRESIDIO_AVAILABLE = True
 except ImportError:
     PRESIDIO_AVAILABLE = False
     AnalyzerEngine = None  # type: ignore
     RecognizerResult = None  # type: ignore
+    SpacyNlpEngine = None  # type: ignore
 
 from veil.detection.entity import Entity, EntityType
+from veil.detection.ner import _DURATION_RE, _is_specific_date, is_false_positive
+
+# Presidio types whose spans come from its spaCy NER and need the same
+# false-positive filtering as our own NER output
+_PRESIDIO_NER_LABELS = {
+    "PERSON": "PERSON",
+    "LOCATION": "GPE",
+    "NRP": "NORP",
+    "ORGANIZATION": "ORG",
+}
+
+# Presidio entity types that tend to have high false positive rates. They are
+# only accepted when Presidio itself is fairly confident.
+PRESIDIO_HIGH_FP_TYPES = {
+    "DATE_TIME",  # Often matches non-date text
+    "US_DRIVER_LICENSE",  # Matches many alphanumeric codes
+    "MEDICAL_LICENSE",  # Overly broad matching
+    "LOCATION",  # Can match common words
+    "US_BANK_NUMBER",  # Any long digit run
+    "US_PASSPORT",
+}
+HIGH_FP_MIN_SCORE = 0.65
 
 
 # Mapping from Presidio entity types to our EntityType
@@ -37,7 +59,6 @@ PRESIDIO_TO_ENTITY_TYPE: dict[str, EntityType] = {
     "US_SSN": EntityType.SSN,
     "US_PASSPORT": EntityType.PASSPORT,
     "US_DRIVER_LICENSE": EntityType.DRIVER_LICENSE,
-    "UK_NHS": EntityType.MEDICAL_RECORD,
     # Technical
     "IP_ADDRESS": EntityType.IP_ADDRESS,
     "URL": EntityType.URL,
@@ -81,9 +102,11 @@ class PresidioDetector:
     def __init__(
         self,
         language: str = "en",
-        entities: Optional[list[str]] = None,
+        entities: list[str] | None = None,
         context_window: int = 50,
         score_threshold: float = 0.3,
+        nlp: object | None = None,
+        model_name: str = "en_core_web_lg",
     ) -> None:
         """Initialize the Presidio detector.
 
@@ -93,6 +116,9 @@ class PresidioDetector:
                      If None, uses DEFAULT_ENTITIES.
             context_window: Characters of context to capture around entities
             score_threshold: Minimum Presidio score to accept (0.0-1.0)
+            nlp: An already-loaded spaCy ``Language`` to reuse instead of
+                letting Presidio load its own copy (saves ~1s and ~500MB)
+            model_name: Name reported to Presidio for ``nlp``
 
         Raises:
             ImportError: If presidio-analyzer is not installed
@@ -110,8 +136,13 @@ class PresidioDetector:
         self.context_window = context_window
         self.score_threshold = score_threshold
 
-        # Initialize Presidio analyzer
-        self.analyzer = AnalyzerEngine()
+        # Initialize Presidio analyzer, sharing the spaCy model when given
+        if nlp is not None:
+            engine = SpacyNlpEngine(models=[{"lang_code": language, "model_name": model_name}])
+            engine.nlp = {language: nlp}  # type: ignore[assignment]
+            self.analyzer = AnalyzerEngine(nlp_engine=engine, supported_languages=[language])
+        else:
+            self.analyzer = AnalyzerEngine()
 
     def _get_context(self, text: str, start: int, end: int) -> str:
         """Extract context around an entity."""
@@ -145,6 +176,19 @@ class PresidioDetector:
 
         entities: list[Entity] = []
         for result in results:
+            if (
+                result.entity_type in PRESIDIO_HIGH_FP_TYPES
+                and result.score < HIGH_FP_MIN_SCORE
+            ):
+                continue
+            span_text = text[result.start:result.end]
+            spacy_label = _PRESIDIO_NER_LABELS.get(result.entity_type)
+            if spacy_label and is_false_positive(span_text, spacy_label):
+                continue
+            if result.entity_type == "DATE_TIME" and (
+                _DURATION_RE.search(span_text) or not _is_specific_date(span_text)
+            ):
+                continue
             entity_type = self._map_entity_type(result.entity_type)
 
             entity = Entity(
@@ -188,11 +232,3 @@ class PresidioDetector:
         return PRESIDIO_AVAILABLE
 
 
-# List of Presidio entity types that tend to have high false positive rates
-# These will be handled with extra caution in the hybrid detector
-PRESIDIO_HIGH_FP_TYPES = {
-    "DATE_TIME",  # Often matches non-date text
-    "US_DRIVER_LICENSE",  # Matches many alphanumeric codes
-    "MEDICAL_LICENSE",  # Overly broad matching
-    "LOCATION",  # Can match common words
-}

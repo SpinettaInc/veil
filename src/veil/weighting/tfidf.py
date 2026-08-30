@@ -5,10 +5,10 @@ similar to how TF-IDF works in information retrieval.
 """
 
 import math
-from collections import Counter
-from dataclasses import dataclass
-from typing import Optional
 import re
+from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
 
 
 @dataclass
@@ -189,6 +189,15 @@ class RarityScorer:
             return phrase_score
 
 
+def _default_zipf() -> "Callable[[str], float] | None":
+    """Return wordfreq's zipf_frequency for English if the package is installed."""
+    try:
+        from wordfreq import zipf_frequency  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return lambda term: zipf_frequency(term, "en")
+
+
 class GlobalRarityScorer(RarityScorer):
     """Rarity scorer that considers global (corpus) statistics.
 
@@ -225,6 +234,8 @@ class GlobalRarityScorer(RarityScorer):
         hapax_boost: float = 0.1,
         common_word_penalty: float = 0.3,
         common_name_penalty: float = 0.15,
+        zipf_fn: "Callable[[str], float] | None" = None,
+        use_wordfreq: bool = True,
     ) -> None:
         """Initialize the global rarity scorer.
 
@@ -234,10 +245,18 @@ class GlobalRarityScorer(RarityScorer):
             hapax_boost: Extra boost for hapax legomena
             common_word_penalty: Penalty for common English words
             common_name_penalty: Penalty for common names
+            zipf_fn: Term -> Zipf frequency (0 = unseen, ~7.5 = "the"). When
+                available, corpus rarity is blended with document rarity, so
+                in a short text — where every entity is a hapax — rare names
+                still score higher than common words.
+            use_wordfreq: Try the optional ``wordfreq`` package for ``zipf_fn``
         """
         super().__init__(min_score, max_score, hapax_boost)
         self.common_word_penalty = common_word_penalty
         self.common_name_penalty = common_name_penalty
+        self.zipf_fn = (
+            zipf_fn if zipf_fn is not None else (_default_zipf() if use_wordfreq else None)
+        )
 
     def score(self, term: str, doc_stats: DocumentStats) -> float:
         """Calculate rarity score with global adjustments.
@@ -251,6 +270,13 @@ class GlobalRarityScorer(RarityScorer):
         """
         base_score = super().score(term, doc_stats)
         term_lower = term.lower()
+
+        # Blend in corpus rarity when a frequency source is available.
+        # Zipf 6+ (very common) -> 0, Zipf <= 1 (essentially unseen) -> 1.
+        if self.zipf_fn is not None:
+            zipf = self.zipf_fn(term_lower)
+            corpus_rarity = max(0.0, min(1.0, (6.0 - zipf) / 5.0))
+            base_score = 0.5 * base_score + 0.5 * corpus_rarity
 
         # Penalize common words
         if term_lower in self.COMMON_WORDS:

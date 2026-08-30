@@ -1,6 +1,7 @@
 """Anthropic LLM provider."""
 
-from typing import Generator, List
+from collections.abc import Generator
+from typing import Any, cast
 
 try:
     from anthropic import Anthropic
@@ -56,7 +57,7 @@ class AnthropicProvider(LLMProvider):
         super().__init__(config)
 
         # Initialize client
-        client_kwargs = {"api_key": config.api_key}
+        client_kwargs: dict[str, Any] = {"api_key": config.api_key}
         if config.base_url:
             client_kwargs["base_url"] = config.base_url
 
@@ -67,13 +68,13 @@ class AnthropicProvider(LLMProvider):
         return "Anthropic"
 
     @property
-    def available_models(self) -> List[str]:
+    def available_models(self) -> list[str]:
         return self.DEFAULT_MODELS
 
     def chat(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> LLMResponse:
         """Send a chat request to Anthropic.
 
@@ -86,7 +87,7 @@ class AnthropicProvider(LLMProvider):
         """
         # Separate system message from conversation
         system_message = ""
-        api_messages = []
+        api_messages: list[Any] = []
 
         for msg in messages:
             if msg.role == "system":
@@ -102,7 +103,7 @@ class AnthropicProvider(LLMProvider):
         response = self.client.messages.create(
             model=self.config.model,
             messages=api_messages,
-            system=system_message if system_message else None,
+            system=cast(Any, system_message if system_message else None),
             temperature=temperature,
             max_tokens=max_tokens,
             **self.config.extra,
@@ -111,7 +112,7 @@ class AnthropicProvider(LLMProvider):
         # Extract response
         content = ""
         if response.content:
-            content = response.content[0].text
+            content = cast(Any, response.content[0]).text
 
         usage = {
             "prompt_tokens": response.usage.input_tokens,
@@ -128,8 +129,8 @@ class AnthropicProvider(LLMProvider):
 
     def chat_stream(
         self,
-        messages: List[Message],
-        **kwargs,
+        messages: list[Message],
+        **kwargs: Any,
     ) -> Generator[str, None, None]:
         """Stream a chat response from Anthropic.
 
@@ -142,7 +143,7 @@ class AnthropicProvider(LLMProvider):
         """
         # Separate system message
         system_message = ""
-        api_messages = []
+        api_messages: list[Any] = []
 
         for msg in messages:
             if msg.role == "system":
@@ -156,13 +157,12 @@ class AnthropicProvider(LLMProvider):
         with self.client.messages.stream(
             model=self.config.model,
             messages=api_messages,
-            system=system_message if system_message else None,
+            system=cast(Any, system_message if system_message else None),
             temperature=temperature,
             max_tokens=max_tokens,
             **self.config.extra,
         ) as stream:
-            for text in stream.text_stream:
-                yield text
+            yield from stream.text_stream
 
     def validate_config(self) -> bool:
         """Validate Anthropic configuration."""

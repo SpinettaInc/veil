@@ -4,27 +4,28 @@ A Gradio-based desktop application for chatting with LLMs while
 automatically protecting sensitive information.
 """
 
-import gradio as gr
-from typing import Generator, List, Optional, Tuple
 import warnings
+from collections.abc import Generator
+from typing import Any, cast
+
+import gradio as gr
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
 
-from veil.config.settings import (
+from veil.config.settings import (  # noqa: E402
     AppSettings,
     get_settings,
     save_settings,
 )
-from veil.llm.providers.base import LLMConfig, Message
-from veil.llm.providers.openai import OpenAIProvider, OPENAI_AVAILABLE
-from veil.llm.providers.anthropic import AnthropicProvider, ANTHROPIC_AVAILABLE
-from veil.llm.providers.ollama import OllamaProvider
-from veil.llm.proxy import VeilProxy
-
+from veil.llm.providers.anthropic import ANTHROPIC_AVAILABLE, AnthropicProvider  # noqa: E402
+from veil.llm.providers.base import LLMConfig, Message  # noqa: E402
+from veil.llm.providers.ollama import OllamaProvider  # noqa: E402
+from veil.llm.providers.openai import OPENAI_AVAILABLE, OpenAIProvider  # noqa: E402
+from veil.llm.proxy import VeilProxy  # noqa: E402
 
 # Provider options
-PROVIDERS = {
+PROVIDERS: dict[str, dict[str, Any]] = {
     "OpenAI": {"available": OPENAI_AVAILABLE, "class": OpenAIProvider},
     "Anthropic": {"available": ANTHROPIC_AVAILABLE, "class": AnthropicProvider},
     "Ollama (Local)": {"available": True, "class": OllamaProvider},
@@ -59,11 +60,11 @@ MODELS = {
 }
 
 # Global state
-current_proxy: Optional[VeilProxy] = None
-conversation_history: List[Message] = []
+current_proxy: VeilProxy | None = None
+conversation_history: list[Message] = []
 
 
-def create_proxy(settings: AppSettings) -> Optional[VeilProxy]:
+def create_proxy(settings: AppSettings) -> VeilProxy | None:
     """Create a VeilProxy from settings."""
     global current_proxy
 
@@ -106,8 +107,8 @@ def create_proxy(settings: AppSettings) -> Optional[VeilProxy]:
 
 def chat_response(
     message: str,
-    history: List[List[str]],
-) -> Tuple[str, str, str, int]:
+    history: list[list[str]],
+) -> tuple[str, str, str, int]:
     """Process a chat message through Veil.
 
     Returns:
@@ -151,8 +152,8 @@ def chat_response(
 
 def chat_interface(
     message: str,
-    history: List[List[str]],
-) -> Generator[Tuple[List[List[str]], str, str, str], None, None]:
+    history: list[list[str]],
+) -> Generator[tuple[list[list[str]], str, str, str], None, None]:
     """Gradio chat interface handler with streaming display."""
     if not message.strip():
         yield history, "", "", ""
@@ -227,7 +228,7 @@ def update_models(provider: str) -> gr.Dropdown:
     return gr.Dropdown(choices=models, value=models[0] if models else "")
 
 
-def clear_chat() -> Tuple[List, str, str, str]:
+def clear_chat() -> tuple[list[Any], str, str, str]:
     """Clear chat history and session."""
     global conversation_history
     conversation_history = []
@@ -247,7 +248,8 @@ def test_connection(
     """Test LLM connection."""
     if provider == "Ollama (Local)":
         try:
-            import requests
+            import requests  # type: ignore[import-untyped]
+
             url = base_url or "http://localhost:11434"
             resp = requests.get(f"{url}/api/tags", timeout=5)
             if resp.status_code == 200:
@@ -335,7 +337,7 @@ def create_app() -> gr.Blocks:
                         with gr.Row():
                             msg_input = gr.Textbox(
                                 label="Your message",
-                                placeholder="Type your message here... (sensitive data will be automatically protected)",
+                                placeholder="Type your message here... (sensitive data will be automatically protected)",  # noqa: E501
                                 lines=2,
                                 scale=4,
                             )
@@ -417,7 +419,7 @@ def create_app() -> gr.Blocks:
                         base_url_input = gr.Textbox(
                             label="Base URL (optional)",
                             value=settings.llm.base_url,
-                            placeholder="Custom API endpoint (e.g., http://localhost:11434 for Ollama)",
+                            placeholder="Custom API endpoint (e.g., http://localhost:11434 for Ollama)",  # noqa: E501
                         )
 
                         with gr.Row():
@@ -448,7 +450,7 @@ def create_app() -> gr.Blocks:
                             label="Detection Profile",
                             choices=["Paranoid", "Balanced", "Minimal"],
                             value=settings.privacy.profile.title(),
-                            info="Paranoid: Maximum protection | Balanced: Good tradeoff | Minimal: Only high-confidence PII",
+                            info="Paranoid: Maximum protection | Balanced: Good tradeoff | Minimal: Only high-confidence PII",  # noqa: E501
                         )
 
                         detection_mode_dropdown = gr.Dropdown(
@@ -462,7 +464,7 @@ def create_app() -> gr.Blocks:
                             label="Replacement Mode",
                             choices=["Token", "Faker", "Semantic"],
                             value=settings.privacy.replacement_mode.title(),
-                            info="Token: [PERSON_1] | Faker: Realistic fakes | Semantic: Similar values",
+                            info="Token: [PERSON_1] | Faker: Realistic fakes | Semantic: Similar values",  # noqa: E501
                         )
 
                         use_presidio_checkbox = gr.Checkbox(
@@ -553,10 +555,10 @@ def create_app() -> gr.Blocks:
                     ### Open Source
 
                     Veil is open source software. Visit the repository for more information.
-                    """
+                    """  # noqa: E501
                 )
 
-    return app
+    return cast(gr.Blocks, app)
 
 
 def launch_app(
@@ -584,9 +586,7 @@ def main() -> None:
     """Entry point for veil-app command."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Veil Desktop App - Privacy-preserving LLM Chat"
-    )
+    parser = argparse.ArgumentParser(description="Veil Desktop App - Privacy-preserving LLM Chat")
     parser.add_argument(
         "--share",
         action="store_true",

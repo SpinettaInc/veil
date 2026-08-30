@@ -10,12 +10,12 @@ It uses voting and confidence boosting when multiple detectors agree.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Any
 
-from veil.detection.entity import Entity, EntityType, merge_overlapping_entities
-from veil.detection.ner import SpacyNER, SPACY_AVAILABLE
+from veil.detection.entity import Entity, EntityType, _rank, merge_overlapping_entities
+from veil.detection.ner import SPACY_AVAILABLE, SpacyNER
 from veil.detection.patterns import PatternDetector
-from veil.detection.presidio import PresidioDetector, PRESIDIO_AVAILABLE
+from veil.detection.presidio import PRESIDIO_AVAILABLE, PresidioDetector
 
 
 class DetectorType(str, Enum):
@@ -79,13 +79,13 @@ class HybridDetector:
         use_spacy: bool = True,
         use_presidio: bool = True,
         use_patterns: bool = True,
-        spacy_model: Optional[str] = None,
+        spacy_model: str | None = None,
         presidio_language: str = "en",
         min_confidence: float = 0.0,
         agreement_boost: float = 0.15,
-        spacy_config: Optional[DetectorConfig] = None,
-        presidio_config: Optional[DetectorConfig] = None,
-        pattern_config: Optional[DetectorConfig] = None,
+        spacy_config: DetectorConfig | None = None,
+        presidio_config: DetectorConfig | None = None,
+        pattern_config: DetectorConfig | None = None,
     ) -> None:
         """Initialize the hybrid detector.
 
@@ -110,9 +110,9 @@ class HybridDetector:
         self.pattern_config = pattern_config or DetectorConfig(enabled=use_patterns)
 
         # Initialize detectors
-        self.spacy_detector: Optional[SpacyNER] = None
-        self.presidio_detector: Optional[PresidioDetector] = None
-        self.pattern_detector: Optional[PatternDetector] = None
+        self.spacy_detector: SpacyNER | None = None
+        self.presidio_detector: PresidioDetector | None = None
+        self.pattern_detector: PatternDetector | None = None
 
         # spaCy
         if self.spacy_config.enabled and SPACY_AVAILABLE:
@@ -120,6 +120,8 @@ class HybridDetector:
                 self.spacy_detector = SpacyNER(
                     model_name=spacy_model,
                     filter_false_positives=True,
+                    # Presidio needs lemmas, so load the full pipeline once and share it
+                    full_pipeline=self.presidio_config.enabled and PRESIDIO_AVAILABLE,
                 )
             except OSError as e:
                 print(f"Warning: Could not load spaCy: {e}")
@@ -128,8 +130,15 @@ class HybridDetector:
         # Presidio
         if self.presidio_config.enabled and PRESIDIO_AVAILABLE:
             try:
+                shared = (
+                    self.spacy_detector
+                    if self.spacy_detector and self.spacy_detector.full_pipeline
+                    else None
+                )
                 self.presidio_detector = PresidioDetector(
                     language=presidio_language,
+                    nlp=shared.nlp if shared else None,
+                    model_name=shared.model_name if shared else "en_core_web_lg",
                 )
             except Exception as e:
                 print(f"Warning: Could not load Presidio: {e}")
@@ -257,12 +266,16 @@ class HybridDetector:
         if not entities:
             return []
 
-        # Group entities by approximate position
+        # Group entities by approximate position. After sorting by start, a
+        # candidate group can only be one whose span still reaches past this
+        # entity's start, so only "open" groups are scanned.
         position_groups: dict[tuple[int, int], list[Entity]] = {}
-        for entity in entities:
-            # Find or create a group for this position
+        open_groups: list[tuple[int, int]] = []
+        for entity in sorted(entities, key=lambda e: (e.start, e.end)):
             group_key = None
-            for key in position_groups:
+            for key in reversed(open_groups):
+                if key[1] <= entity.start:
+                    break
                 if self._positions_match(entity.start, entity.end, key[0], key[1]):
                     group_key = key
                     break
@@ -270,6 +283,8 @@ class HybridDetector:
             if group_key is None:
                 group_key = (entity.start, entity.end)
                 position_groups[group_key] = []
+                open_groups.append(group_key)
+                open_groups.sort(key=lambda k: k[1])
 
             position_groups[group_key].append(entity)
 
@@ -280,8 +295,10 @@ class HybridDetector:
                 # Only one detector found this - keep as is
                 result.append(group[0])
             else:
-                # Multiple detectors agree - boost the best one
-                best_entity = max(group, key=lambda e: e.confidence)
+                # Multiple detectors agree - boost the best one. "Best" uses the
+                # same ranking as overlap merging so a validated PHONE beats a
+                # spaCy CARDINAL covering the same span.
+                best_entity = max(group, key=_rank)
                 unique_sources = len(set(e.source for e in group))
 
                 # Calculate boost based on number of agreeing sources
@@ -299,7 +316,7 @@ class HybridDetector:
                     context=best_entity.context,
                     metadata={
                         **best_entity.metadata,
-                        "sources": [e.source for e in group],
+                        "sources": sorted({e.source for e in group}),
                         "agreement_count": unique_sources,
                     },
                 )
@@ -352,7 +369,7 @@ class HybridDetector:
         all_entities = self.detect(text)
         return [e for e in all_entities if e.entity_type in entity_types]
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Get statistics about the detector configuration.
 
         Returns:

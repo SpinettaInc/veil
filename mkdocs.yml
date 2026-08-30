@@ -72,6 +72,8 @@ nav:
       - CLI Reference: guide/cli.md
       - Python API: guide/python-api.md
       - Desktop App: guide/desktop-app.md
+      - API Server: guide/api-server.md
+      - Audit Log: guide/audit.md
       - Detection Profiles: guide/profiles.md
       - Replacement Modes: guide/replacement-modes.md
   - Integrations:
