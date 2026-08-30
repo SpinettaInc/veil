@@ -20,7 +20,7 @@ print(result.anonymized_text)
 
 assert "[EMPLOYEE_ID_1]" in result.anonymized_text
 assert "[PROJECT_CODE_1]" in result.anonymized_text
-assert "XYZ-999" in result.anonymized_text  # requires_context kept it
+assert "[PROJECT_CODE_2]" not in result.anonymized_text  # XYZ-999: no cue word, not a code
 
 # Custom tokens reconstruct like any other, even if the model reformats them.
 print(
