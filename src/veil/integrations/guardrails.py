@@ -49,9 +49,9 @@ except ImportError:
             pass
 
 
-from veil.core.pipeline import VeilPipeline
+from veil.core.pipeline import AnonymizationResult, VeilPipeline
 from veil.detection.entity import Entity, EntityType
-from veil.weighting.config import DetectionProfile
+from veil.weighting.config import parse_profile
 
 
 @dataclass
@@ -73,10 +73,50 @@ class PIIValidationResult:
     original_text: str
 
 
+class _VeilPipelineMixin:
+    """Pipeline setup shared by the validators."""
+
+    _pipeline: VeilPipeline | None = None
+
+    def _configure(
+        self, profile: str, detection_mode: str, replacement_mode: str, use_presidio: bool
+    ) -> None:
+        self.profile = profile
+        self.detection_mode = detection_mode
+        self.replacement_mode = replacement_mode
+        self.use_presidio = use_presidio
+        self._profile = parse_profile(profile)
+
+    def _get_pipeline(self) -> VeilPipeline:
+        """Get or create the Veil pipeline (created on first use)."""
+        if self._pipeline is None:
+            self._pipeline = VeilPipeline(
+                use_ner=True,
+                use_patterns=True,
+                use_presidio=self.use_presidio,
+                profile=self._profile,
+                detection_mode=self.detection_mode,
+                replacement_mode=self.replacement_mode,
+            )
+        return self._pipeline
+
+    def _anonymize(
+        self, value: str, entity_types: list[EntityType] | None = None
+    ) -> AnonymizationResult:
+        """Anonymize one value in its own session.
+
+        Each validation is an unrelated text; sharing one mapping store would
+        give the same person the same token across all of them.
+        """
+        pipeline = self._get_pipeline()
+        pipeline.clear_mappings()
+        return pipeline.anonymize(value, entity_types=entity_types or None)
+
+
 if GUARDRAILS_AVAILABLE:
 
     @register_validator(name="veil/pii-detector", data_type="string")
-    class VeilPIIValidator(Validator):  # type: ignore[misc]
+    class VeilPIIValidator(_VeilPipelineMixin, Validator):  # type: ignore[misc]
         """Guardrails validator that detects PII using Veil.
 
         This validator uses Veil's hybrid detection engine (spaCy + Presidio +
@@ -120,18 +160,9 @@ if GUARDRAILS_AVAILABLE:
         ) -> None:
             super().__init__(on_fail=on_fail or OnFailAction.NOOP, **kwargs)
 
-            self.profile = profile
-            self.detection_mode = detection_mode
-            self.replacement_mode = replacement_mode
-            self.use_presidio = use_presidio
+            self._configure(profile, detection_mode, replacement_mode, use_presidio)
             self.min_entities = min_entities
             self.entity_types = entity_types
-
-            # Parse profile
-            try:
-                self._profile = DetectionProfile(profile.lower())
-            except ValueError:
-                self._profile = DetectionProfile.BALANCED
 
             # Parse entity types if provided
             self._entity_types: list[EntityType] | None = None
@@ -141,23 +172,8 @@ if GUARDRAILS_AVAILABLE:
                     try:
                         self._entity_types.append(EntityType(et.upper()))
                     except ValueError:
-                        pass  # Skip invalid types
-
-            # Create pipeline (lazy initialization)
-            self._pipeline: VeilPipeline | None = None
-
-        def _get_pipeline(self) -> VeilPipeline:
-            """Get or create the Veil pipeline."""
-            if self._pipeline is None:
-                self._pipeline = VeilPipeline(
-                    use_ner=True,
-                    use_patterns=True,
-                    use_presidio=self.use_presidio,
-                    profile=self._profile,
-                    detection_mode=self.detection_mode,
-                    replacement_mode=self.replacement_mode,
-                )
-            return self._pipeline
+                        # Skipping a misspelt type would quietly check less
+                        raise ValueError(f"Unknown entity type '{et}'") from None
 
         def _validate(
             self,
@@ -176,13 +192,7 @@ if GUARDRAILS_AVAILABLE:
             if not value or not value.strip():
                 return PassResult()
 
-            pipeline = self._get_pipeline()
-
-            # Detect and anonymize
-            if self._entity_types:
-                result = pipeline.anonymize(value, entity_types=self._entity_types)
-            else:
-                result = pipeline.anonymize(value)
+            result = self._anonymize(value, self._entity_types)
 
             # Check if enough entities were found
             if result.entity_count >= self.min_entities:
@@ -221,7 +231,7 @@ if GUARDRAILS_AVAILABLE:
             }
 
     @register_validator(name="veil/anonymizer", data_type="string")
-    class VeilAnonymizer(Validator):  # type: ignore[misc]
+    class VeilAnonymizer(_VeilPipelineMixin, Validator):  # type: ignore[misc]
         """Guardrails validator that always anonymizes text.
 
         Unlike VeilPIIValidator which can pass or fail, this validator
@@ -255,30 +265,7 @@ if GUARDRAILS_AVAILABLE:
             # Always use FIX since we always want to anonymize
             super().__init__(on_fail=OnFailAction.FIX, **kwargs)
 
-            self.profile = profile
-            self.replacement_mode = replacement_mode
-            self.detection_mode = detection_mode
-            self.use_presidio = use_presidio
-
-            try:
-                self._profile = DetectionProfile(profile.lower())
-            except ValueError:
-                self._profile = DetectionProfile.BALANCED
-
-            self._pipeline: VeilPipeline | None = None
-
-        def _get_pipeline(self) -> VeilPipeline:
-            """Get or create the Veil pipeline."""
-            if self._pipeline is None:
-                self._pipeline = VeilPipeline(
-                    use_ner=True,
-                    use_patterns=True,
-                    use_presidio=self.use_presidio,
-                    profile=self._profile,
-                    detection_mode=self.detection_mode,
-                    replacement_mode=self.replacement_mode,
-                )
-            return self._pipeline
+            self._configure(profile, detection_mode, replacement_mode, use_presidio)
 
         def _validate(
             self,
@@ -297,8 +284,7 @@ if GUARDRAILS_AVAILABLE:
             if not value or not value.strip():
                 return PassResult()
 
-            pipeline = self._get_pipeline()
-            result = pipeline.anonymize(value)
+            result = self._anonymize(value)
 
             if result.entity_count > 0:
                 return FailResult(

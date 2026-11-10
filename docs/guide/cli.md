@@ -178,32 +178,41 @@ veil reconstruct [OPTIONS] TEXT
 
 | Option | Description |
 |--------|-------------|
-| `--mapping`, `-m` | JSON file with mappings |
+| `--mapping`, `-m` | JSON file with mappings (required): the output of `veil anonymize --json`, or `MappingStore.to_dict()` |
+
+Mappings live only for the lifetime of one process, so the mapping file is
+required. Tokens the model rewrote (`PERSON_1`, `[person 1]`) are restored too.
 
 **Example:**
 
 ```bash
-# Use mapping file
+veil anonymize "John Smith works at Acme Corp" --json -o mappings.json
 veil reconstruct "[PERSON_1] works at [ORG_1]" --mapping mappings.json
-
-# Use session mappings (after anonymize command)
-veil reconstruct "[PERSON_1] works at [ORG_1]"
 ```
 
 ---
 
 ### stats
 
-Show statistics about the current pipeline.
+Show the detection configuration a profile would run with: which detectors
+and models load on this machine, the profile's threshold and the replacement
+mode. Mappings are not shown, as they only exist inside a running process.
 
 ```bash
-veil stats
+veil stats [OPTIONS]
 ```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--profile`, `-p` | Profile name or path to a YAML profile (default `balanced`) |
+| `--hybrid` | Show the hybrid-mode configuration |
 
 **Example:**
 
 ```bash
-veil stats
+veil stats --profile paranoid
 ```
 
 Output:
@@ -218,19 +227,16 @@ Detector:
   NER model: en_core_web_sm
   Presidio enabled: False
   Patterns enabled: True
-  Pattern count: 15
+  Pattern count: 25
 
-Profile: balanced
+Profile: paranoid
   Weighting enabled: True
-  Threshold: 0.5
-  Rarity factor: 0.1
+  Threshold: 0.3
+  Rarity factor: 0.15
 
 Replacement:
   Mode: token
   Bracket style: square
-
-Mappings:
-  Total mappings: 0
 ```
 
 ---

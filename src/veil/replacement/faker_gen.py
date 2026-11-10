@@ -48,13 +48,12 @@ class FakerReplacer:
                 "Install with: pip install faker"
             )
 
+        # Seed this instance only: reseeding the global ``random`` / Faker
+        # generators would change the behaviour of unrelated code in the process.
         self.faker = Faker(locale)
+        self._rng = random.Random(seed)
         if seed is not None:
-            Faker.seed(seed)
-            random.seed(seed)
-
-        # Cache for consistent replacements of same entity type
-        self._type_counters: dict[EntityType, int] = {}
+            self.faker.seed_instance(seed)
 
     def generate_replacement(
         self,
@@ -74,7 +73,7 @@ class FakerReplacer:
             Fake replacement string
         """
         # Check if we already have a mapping for this text
-        existing = mapping_store.get_replacement(entity.text)
+        existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
         if existing:
             return existing
 
@@ -141,9 +140,9 @@ class FakerReplacer:
 
         # Simple format: XXX-XXX-XXXX
         if "-" in original and len(original.replace("-", "")) == 10:
-            area = str(random.randint(200, 999))
-            exchange = str(random.randint(200, 999))
-            subscriber = str(random.randint(1000, 9999))
+            area = str(self._rng.randint(200, 999))
+            exchange = str(self._rng.randint(200, 999))
+            subscriber = str(self._rng.randint(1000, 9999))
             return f"{area}-{exchange}-{subscriber}"
 
         return self.faker.phone_number()
@@ -151,9 +150,9 @@ class FakerReplacer:
     def _generate_ssn(self, original: str) -> str:
         """Generate a fake SSN in same format."""
         # Standard format: XXX-XX-XXXX
-        area = str(random.randint(100, 899))
-        group = str(random.randint(10, 99))
-        serial = str(random.randint(1000, 9999))
+        area = str(self._rng.randint(100, 899))
+        group = str(self._rng.randint(10, 99))
+        serial = str(self._rng.randint(1000, 9999))
 
         if "-" in original:
             return f"{area}-{group}-{serial}"
@@ -178,15 +177,15 @@ class FakerReplacer:
         # Mix of company suffixes for variety
         suffixes = ["Inc.", "Corp.", "LLC", "Ltd.", "Group", "Industries", "Solutions"]
         base_name = self.faker.company().split()[0]  # Take first word
-        suffix = random.choice(suffixes)
+        suffix = self._rng.choice(suffixes)
         return f"{base_name} {suffix}"
 
     def _generate_location(self, original: str) -> str:
         """Generate a fake location."""
         # Try to match original pattern
-        if len(original.split()) == 1:
-            return self.faker.city().split()[0]
-        return self.faker.city()
+        # Not the first word of a city: that is "New", "West", "Lake"... for
+        # a large share of them, so different places collapse onto one value.
+        return str(self.faker.city())
 
     def _generate_date(self, original: str) -> str:
         """Generate a fake date in similar format."""
@@ -208,16 +207,16 @@ class FakerReplacer:
         """Generate a fake monetary amount."""
         # Detect currency symbol
         if "$" in original:
-            amount = random.randint(100, 99999)
+            amount = self._rng.randint(100, 99999)
             return f"${amount:,}"
         elif "€" in original:
-            amount = random.randint(100, 99999)
+            amount = self._rng.randint(100, 99999)
             return f"€{amount:,}"
         elif "£" in original:
-            amount = random.randint(100, 99999)
+            amount = self._rng.randint(100, 99999)
             return f"£{amount:,}"
         else:
-            amount = random.randint(100, 99999)
+            amount = self._rng.randint(100, 99999)
             return f"${amount:,}"
 
     def _generate_ip(self, original: str) -> str:
@@ -238,15 +237,15 @@ class FakerReplacer:
     def _generate_passport(self, original: str) -> str:
         """Generate a fake passport number."""
         # US passport format: 9 alphanumeric characters
-        letters = "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=2))
-        numbers = "".join(random.choices("0123456789", k=7))
+        letters = "".join(self._rng.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=2))
+        numbers = "".join(self._rng.choices("0123456789", k=7))
         return f"{letters}{numbers}"
 
     def _generate_driver_license(self, original: str) -> str:
         """Generate a fake driver's license number."""
         # Generic format: letter + numbers
-        letter = random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        numbers = "".join(random.choices("0123456789", k=8))
+        letter = self._rng.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        numbers = "".join(self._rng.choices("0123456789", k=8))
         return f"{letter}{numbers}"
 
     def _generate_bank_account(self, original: str) -> str:
@@ -255,12 +254,12 @@ class FakerReplacer:
         length = len(original.replace("-", "").replace(" ", ""))
         if length < 8:
             length = 10
-        return "".join(random.choices("0123456789", k=length))
+        return "".join(self._rng.choices("0123456789", k=length))
 
     def _generate_medical_record(self, original: str) -> str:
         """Generate a fake medical record number."""
         # Format: MRN-XXXXXXX
-        numbers = "".join(random.choices("0123456789", k=7))
+        numbers = "".join(self._rng.choices("0123456789", k=7))
         return f"MRN-{numbers}"
 
     def _generate_generic(self, original: str) -> str:

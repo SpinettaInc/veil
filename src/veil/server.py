@@ -67,11 +67,15 @@ class VeilService:
 
     # -- sessions ---------------------------------------------------------
 
-    def _session(self, session_id: str | None) -> tuple[str, _Session]:
+    def _session(self, session_id: str | None, create: bool = True) -> tuple[str, _Session]:
+        if session_id is not None and not isinstance(session_id, str):
+            raise ValueError("'session_id' must be a string")
         with self._lock:
             self._expire()
             if session_id and session_id in self._sessions:
                 sess = self._sessions[session_id]
+            elif not create:
+                raise UnknownSessionError(session_id)
             else:
                 session_id = session_id or uuid4().hex
                 sess = self._sessions.setdefault(session_id, _Session())
@@ -119,15 +123,13 @@ class VeilService:
         }
 
     def reconstruct(self, text: str, session_id: str) -> dict[str, Any]:
-        with self._lock:
-            if session_id not in self._sessions:
-                raise KeyError(session_id)
-        sid, sess = self._session(session_id)
+        # Looked up and touched under one lock: a session that expires in
+        # between must be a 404, not a fresh empty session that "restores" nothing.
+        sid, sess = self._session(session_id, create=False)
         with sess.lock, self._pipeline_lock:
-            self.pipeline.mapping_store = sess.store
             if self.audit:
                 self.audit.session_id = sid
-            result = self.pipeline.reconstruct(text)
+            result = self.pipeline.reconstruct(text, mapping_store=sess.store)
         return {
             "session_id": sid,
             "reconstructed_text": result.reconstructed_text,
@@ -148,6 +150,10 @@ class VeilService:
         }
 
 
+class UnknownSessionError(KeyError):
+    """The session id does not exist (or has expired)."""
+
+
 def make_handler(service: VeilService) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = f"veil/{__version__}"
@@ -166,6 +172,8 @@ def make_handler(service: VeilService) -> type[BaseHTTPRequestHandler]:
 
         def _read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
+            if length < 0:
+                raise ValueError("invalid Content-Length")
             if length > service.max_text_chars * 4 + 4096:
                 raise ValueError("request body too large")
             raw = self.rfile.read(length) if length else b"{}"
@@ -209,10 +217,17 @@ def make_handler(service: VeilService) -> type[BaseHTTPRequestHandler]:
                     self._json(HTTPStatus.OK, {"cleared": cleared})
                 else:
                     self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-            except KeyError:
+            except UnknownSessionError:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "unknown session"})
-            except (ValueError, json.JSONDecodeError) as exc:
+            except ValueError as exc:  # includes json.JSONDecodeError
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            except Exception as exc:
+                # Always answer, and never echo the exception text: it may
+                # quote the request body.
+                self._json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": f"internal error ({type(exc).__name__})"},
+                )
 
     return Handler
 

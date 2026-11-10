@@ -6,7 +6,7 @@ API keys, preferences, and LLM settings.
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +92,13 @@ class UISettings:
     auto_clear_session: bool = False
 
 
+def _known(section: type, values: dict[str, Any]) -> dict[str, Any]:
+    """Drop keys the section does not define (a newer or hand-edited file)
+    instead of discarding the whole file, API key included."""
+    names = {f.name for f in fields(section)}
+    return {k: v for k, v in values.items() if k in names}
+
+
 @dataclass
 class AppSettings:
     """Complete application settings.
@@ -121,9 +128,9 @@ class AppSettings:
     def from_dict(cls, data: dict[str, Any]) -> "AppSettings":
         """Create settings from dictionary."""
         return cls(
-            llm=LLMSettings(**data.get("llm", {})),
-            privacy=PrivacySettings(**data.get("privacy", {})),
-            ui=UISettings(**data.get("ui", {})),
+            llm=LLMSettings(**_known(LLMSettings, data.get("llm", {}))),
+            privacy=PrivacySettings(**_known(PrivacySettings, data.get("privacy", {}))),
+            ui=UISettings(**_known(UISettings, data.get("ui", {}))),
             system_prompt=data.get("system_prompt", ""),
         )
 
@@ -136,8 +143,14 @@ class AppSettings:
         config_file = path or get_config_file()
         config_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(config_file, "w") as f:
+        # The file holds the API key: owner-only, also when it already exists
+        fd = os.open(config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
+        try:
+            os.chmod(config_file, 0o600)
+        except OSError:
+            pass
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppSettings":
@@ -158,7 +171,7 @@ class AppSettings:
             with open(config_file) as f:
                 data = json.load(f)
             return cls.from_dict(data)
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             # Return defaults if config is corrupted
             return cls()
 

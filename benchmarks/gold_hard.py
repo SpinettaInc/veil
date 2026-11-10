@@ -74,4 +74,16 @@ CASES: list[tuple[str, list[tuple[str, str]]]] = [
     ("Monday at 9am works; otherwise Tuesday afternoon.", []),
     ("SELECT id, total FROM orders WHERE total > 1000 LIMIT 50;", []),
     ("Your one-time code is 483920. It expires in 10 minutes.", []),
+    # formats and near-misses added with the pattern fixes
+    (
+        "IBAN: ES9121000418450200051332 BIC on request.",
+        [("ES9121000418450200051332", "IBAN")],
+    ),
+    ("Server 2001:db8::8a2e:370:7334 is down.", [("2001:db8::8a2e:370:7334", "IP_ADDRESS")]),
+    ("Patient MRN: 12345678 was discharged.", [("12345678", "MEDICAL_RECORD")]),
+    ("Charged to card 2221000000000009 today.", [("2221000000000009", "CREDIT_CARD")]),
+    ("Call +44 7911 123456 after lunch.", [("+44 7911 123456", "PHONE")]),
+    ("I took 2 steps that way and saw 3 people in court.", []),
+    ("The capacity is 50000 units per statement.", []),
+    ("Order 123456789 shipped.", []),
 ]

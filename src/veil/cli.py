@@ -8,7 +8,10 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
+from veil.core.detector import DetectionUnavailableError
+from veil.core.mapper import MappingStore
 from veil.core.pipeline import VeilPipeline
 from veil.weighting.config import DetectionProfile, WeightConfig, load_profile
 
@@ -17,31 +20,20 @@ app = typer.Typer(
     name="veil",
     help="Privacy-preserving proxy for LLMs - anonymize sensitive data before sending to AI",
     add_completion=False,
+    # A traceback with locals would print the very text being anonymized
+    pretty_exceptions_show_locals=False,
 )
 
 # Rich console for pretty output
 console = Console()
 
-# Global pipeline instance for interactive sessions
-_pipeline: VeilPipeline | None = None
-
-
-def get_pipeline(
-    use_ner: bool = True,
-    use_patterns: bool = True,
-    profile: DetectionProfile = DetectionProfile.BALANCED,
-    weight_config: "WeightConfig | None" = None,
-) -> VeilPipeline:
-    """Get or create the global pipeline instance."""
-    global _pipeline
-    if _pipeline is None:
-        _pipeline = VeilPipeline(
-            use_ner=use_ner,
-            use_patterns=use_patterns,
-            profile=profile,
-            weight_config=weight_config,
-        )
-    return _pipeline
+def build_pipeline(**kwargs: Any) -> VeilPipeline:
+    """Create a pipeline, turning setup problems into a clean CLI error."""
+    try:
+        return VeilPipeline(**kwargs)
+    except (ImportError, DetectionUnavailableError, ValueError) as e:
+        console.print("[red]Error:[/red]", Text(str(e)))
+        raise typer.Exit(1) from None
 
 
 def parse_profile(profile_str: str) -> DetectionProfile:
@@ -180,23 +172,17 @@ def anonymize(
     use_presidio = presidio
     detection_mode = "hybrid" if (hybrid or presidio) else "standard"
 
-    # Create pipeline
-    try:
-        pipeline = VeilPipeline(
-            use_ner=not no_ner,
-            use_patterns=not no_patterns,
-            use_presidio=use_presidio,
-            profile=detection_profile,
-            weight_config=weight_config,
-            use_weighting=not no_weighting,
-            replacement_mode=replacement_mode.lower(),
-            faker_seed=faker_seed,
-            detection_mode=detection_mode,
-        )
-    except ImportError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        console.print("[dim]Install optional dependencies with: pip install veil[presidio][/dim]")
-        raise typer.Exit(1)
+    pipeline = build_pipeline(
+        use_ner=not no_ner,
+        use_patterns=not no_patterns,
+        use_presidio=use_presidio,
+        profile=detection_profile,
+        weight_config=weight_config,
+        use_weighting=not no_weighting,
+        replacement_mode=replacement_mode.lower(),
+        faker_seed=faker_seed,
+        detection_mode=detection_mode,
+    )
 
     # Anonymize
     result = pipeline.anonymize(input_text)
@@ -218,13 +204,15 @@ def anonymize(
             output_file.write_text(json.dumps(output, indent=2))
             console.print(f"[green]Output written to {output_file}[/green]")
         else:
-            console.print(json.dumps(output, indent=2))
+            # Not console.print: rich hard-wraps long lines and interprets
+            # "[...]" in the text as markup, both of which corrupt the JSON.
+            typer.echo(json.dumps(output, indent=2))
     else:
         if output_file:
             output_file.write_text(result.anonymized_text)
             console.print(f"[green]Output written to {output_file}[/green]")
         else:
-            console.print(Panel(result.anonymized_text, title="Anonymized Text"))
+            console.print(Panel(Text(result.anonymized_text), title="Anonymized Text"))
 
         if show_mapping and result.entities:
             _show_mapping_table(result.replacements, result.entities)
@@ -277,7 +265,7 @@ def detect(
     detection_profile, weight_config = parse_profile_or_path(profile)
     detection_mode = "hybrid" if (hybrid or presidio) else "standard"
 
-    pipeline = VeilPipeline(
+    pipeline = build_pipeline(
         use_ner=not no_ner,
         use_patterns=not no_patterns,
         use_presidio=presidio,
@@ -303,7 +291,7 @@ def detect(
 
     for entity in entities:
         table.add_row(
-            entity.text,
+            Text(entity.text),
             entity.entity_type.value,
             f"{entity.start}:{entity.end}",
             f"{entity.confidence:.2f}",
@@ -344,7 +332,7 @@ def score(
     """
     detection_profile, weight_config = parse_profile_or_path(profile)
 
-    pipeline = VeilPipeline(
+    pipeline = build_pipeline(
         use_ner=not no_ner,
         use_patterns=not no_patterns,
         profile=detection_profile,
@@ -373,7 +361,7 @@ def score(
     for s in scores:
         anonymize_str = "[green]Yes[/green]" if s.above_threshold else "[red]No[/red]"
         table.add_row(
-            s.entity.text[:20] + "..." if len(s.entity.text) > 20 else s.entity.text,
+            Text(s.entity.text[:20] + "..." if len(s.entity.text) > 20 else s.entity.text),
             s.entity.entity_type.value,
             f"{s.base_score:.2f}",
             f"+{s.context_boost:.2f}",
@@ -408,41 +396,65 @@ def reconstruct(
     """
     import json
 
-    if mapping_file:
-        if not mapping_file.exists():
-            console.print(f"[red]Error:[/red] Mapping file not found: {mapping_file}")
-            raise typer.Exit(1)
+    if mapping_file is None:
+        # Mappings only live for one process, so there is nothing to restore from
+        console.print(
+            "[red]Error:[/red] --mapping is required. Save one with: "
+            "veil anonymize TEXT --json -o mappings.json"
+        )
+        raise typer.Exit(1)
+    if not mapping_file.exists():
+        console.print("[red]Error:[/red] Mapping file not found:", Text(str(mapping_file)))
+        raise typer.Exit(1)
 
-        data = json.loads(mapping_file.read_text())
-        from veil.core.mapper import MappingStore
+    try:
+        mapping_store = _load_mapping_store(json.loads(mapping_file.read_text()))
+    except (ValueError, KeyError, TypeError, AttributeError):
+        console.print(
+            "[red]Error:[/red] Not a mapping file: expected the output of "
+            "'veil anonymize --json' or MappingStore.to_dict()"
+        )
+        raise typer.Exit(1) from None
 
-        mapping_store = MappingStore.from_dict(data)
-    else:
-        # Use global pipeline if available
-        pipeline = get_pipeline()
-        mapping_store = pipeline.mapping_store
-
-    if len(mapping_store) == 0:
-        console.print("[yellow]Warning: No mappings available[/yellow]")
-        console.print(text)
-        return
-
-    # Reconstruct
-    result = text
-    replacements = 0
-    for entry in mapping_store:
-        if entry.replacement in result:
-            result = result.replace(entry.replacement, entry.original)
-            replacements += 1
-
-    console.print(Panel(result, title="Reconstructed Text"))
+    restored, replacements = mapping_store.restore(text)
+    console.print(Panel(Text(restored), title="Reconstructed Text"))
     console.print(f"\n[dim]Made {replacements} replacements[/dim]")
 
 
+def _load_mapping_store(data: Any) -> MappingStore:
+    """Build a store from ``MappingStore.to_dict()`` or ``veil anonymize --json`` output."""
+    from veil.detection.entity import EntityType
+
+    mappings = data["mappings"]
+    if isinstance(mappings, list):
+        return MappingStore.from_dict(data)
+    types = {e["text"]: e["entity_type"] for e in data.get("entities", [])}
+    store = MappingStore()
+    for original, replacement in mappings.items():
+        entity_type = EntityType(types.get(original, EntityType.UNKNOWN.value))
+        store.add(original=original, replacement=replacement, entity_type=entity_type)
+    return store
+
+
 @app.command()
-def stats() -> None:
-    """Show statistics about the current pipeline."""
-    pipeline = get_pipeline()
+def stats(
+    profile: str = typer.Option(
+        "balanced", "--profile", "-p", help="Detection profile name or path to a YAML profile"
+    ),
+    hybrid: bool = typer.Option(False, "--hybrid", help="Show the hybrid-mode configuration"),
+) -> None:
+    """Show the detection configuration a profile would run with.
+
+    Reports which detectors and models load on this machine, the profile's
+    threshold and the replacement mode. Mappings are not shown: they exist
+    only inside a running process.
+    """
+    detection_profile, weight_config = parse_profile_or_path(profile)
+    pipeline = build_pipeline(
+        profile=detection_profile,
+        weight_config=weight_config,
+        detection_mode="hybrid" if hybrid else "standard",
+    )
     stats = pipeline.get_stats()
 
     console.print(Panel.fit("[bold]Veil Pipeline Statistics[/bold]"))
@@ -479,15 +491,6 @@ def stats() -> None:
         if repl.get("locale"):
             console.print(f"  Faker locale: {repl['locale']}")
 
-    # Mapping stats
-    maps = stats["mappings"]
-    console.print("\n[bold]Mappings:[/bold]")
-    console.print(f"  Total mappings: {maps['total_mappings']}")
-    if maps.get("by_type"):
-        console.print("  By type:")
-        for entity_type, count in maps["by_type"].items():
-            console.print(f"    {entity_type}: {count}")
-
 
 @app.command()
 def version() -> None:
@@ -517,7 +520,7 @@ def serve(
     detection_profile, weight_config = parse_profile_or_path(profile)
     logger = AuditLogger(audit) if audit else None
     service = VeilService(
-        pipeline=VeilPipeline(
+        pipeline=build_pipeline(
             profile=detection_profile,
             weight_config=weight_config,
             detection_mode=detection_mode,
@@ -597,7 +600,7 @@ def _show_mapping_table(
 
     for original, replacement in replacements.items():
         entity_type = type_lookup.get(original, "unknown")
-        table.add_row(original, replacement, entity_type)
+        table.add_row(Text(original), Text(replacement), entity_type)
 
     console.print(table)
 

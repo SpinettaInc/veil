@@ -73,6 +73,7 @@ class ReplacementEngine:
 
         # Initialize appropriate replacer
         self.replacer = self._create_replacer(mode)
+        self._fallback = TokenReplacer(bracket_style=bracket_style)
 
     def _create_replacer(
         self,
@@ -109,13 +110,16 @@ class ReplacementEngine:
         else:
             raise ValueError(f"Unknown replacement mode: {mode}")
 
+    # Attempts at a non-colliding fake value before falling back to a token
+    MAX_ATTEMPTS = 6
+
     def replace(
         self,
         entity: Entity,
         mapping_store: MappingStore,
         context: str | None = None,
     ) -> str:
-        """Generate replacement for an entity.
+        """Replacement for an entity: its existing one, or a newly generated one.
 
         Args:
             entity: Entity to replace
@@ -125,22 +129,37 @@ class ReplacementEngine:
         Returns:
             Replacement string
         """
-        # Check existing mapping first (partial names resolve to the same token)
+        # Partial names resolve to the same replacement as the full name
         existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
-        if existing:
-            return existing
+        return existing or self._generate(entity, mapping_store, context)
 
-        # Use context-aware replacement for semantic mode
-        if (
-            self.mode == ReplacementMode.SEMANTIC
-            and context
-            and isinstance(self.replacer, SemanticReplacer)
-        ):
-            return self.replacer.get_context_aware_replacement(
-                entity, context, mapping_store
-            )
-
+    def _generate(
+        self, entity: Entity, mapping_store: MappingStore, context: str | None
+    ) -> str:
+        if context and isinstance(self.replacer, SemanticReplacer):
+            return self.replacer.get_context_aware_replacement(entity, context, mapping_store)
         return self.replacer.generate_replacement(entity, mapping_store)
+
+    def _new_replacement(
+        self, entity: Entity, text: str, mapping_store: MappingStore, context: str | None
+    ) -> str:
+        """Generate a replacement that reconstruction can map back unambiguously.
+
+        A fake value is unusable if it is already the replacement of another
+        original (both would be restored as that one), occurs in the input,
+        or is itself a mapped original. After a few attempts a token is used
+        instead: it is ugly in faker/semantic output but always unique.
+        """
+        for _ in range(self.MAX_ATTEMPTS):
+            replacement = self._generate(entity, mapping_store, context)
+            if not (
+                mapping_store.is_blocked(replacement)
+                or replacement in text
+                or mapping_store.has_original(replacement)
+            ):
+                return replacement
+            mapping_store.block({replacement})
+        return self._fallback.generate_replacement(entity, mapping_store)
 
     def replace_all(
         self,
@@ -162,42 +181,25 @@ class ReplacementEngine:
             return text
 
         # Decide replacements in reading order so the first (usually fullest)
-        # mention of a name defines its token, then splice from the end so
-        # earlier offsets stay valid.
-        planned: list[tuple[Entity, str]] = []
-        for entity in sorted(entities, key=lambda e: e.start):
-            # Get context around entity for semantic mode
-            context = None
-            if self.mode == ReplacementMode.SEMANTIC:
-                context_start = max(0, entity.start - 50)
-                context_end = min(len(text), entity.end + 50)
-                context = text[context_start:context_end]
-
-            # Generate replacement; a fake value that already occurs in the
-            # input (or is itself a mapped original) would corrupt
-            # reconstruction, so retry a few times before accepting it.
-            replacement = self.replace(entity, mapping_store, context)
-            if not mapping_store.has_replacement(replacement):
-                for _ in range(5):
-                    if replacement not in text and not mapping_store.has_original(replacement):
-                        break
-                    mapping_store.block({replacement})
-                    replacement = self.replace(entity, mapping_store, context)
-
-            # Add to mapping store if new
-            if not mapping_store.has_original(entity.text):
-                mapping_store.add(
-                    original=entity.text,
-                    replacement=replacement,
-                    entity_type=entity.entity_type,
-                    entity=entity,
-                )
-            planned.append((entity, replacement))
-
+        # mention of a name defines its token.
         pieces: list[str] = []
         cursor = 0
-        for entity, replacement in planned:
-            pieces.append(text[cursor:entity.start])
+        for entity in sorted(entities, key=lambda e: e.start):
+            replacement = mapping_store.get_replacement_for(entity.text, entity.entity_type)
+            if replacement is None:
+                context = None
+                if self.mode == ReplacementMode.SEMANTIC:
+                    context = text[max(0, entity.start - 50) : entity.end + 50]
+                replacement = self._new_replacement(entity, text, mapping_store, context)
+
+            # Registers a new entry, or this surface form as an alias
+            mapping_store.add(
+                original=entity.text,
+                replacement=replacement,
+                entity_type=entity.entity_type,
+                entity=entity,
+            )
+            pieces.append(text[cursor : entity.start])
             pieces.append(replacement)
             cursor = entity.end
         pieces.append(text[cursor:])

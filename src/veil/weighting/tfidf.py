@@ -8,7 +8,12 @@ import math
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+def tokenize(text: str) -> list[str]:
+    """Lowercased word terms: the unit both documents and entities are counted in."""
+    return re.findall(r"\b\w+\b", text.lower())
 
 
 @dataclass
@@ -19,11 +24,13 @@ class DocumentStats:
         term_counts: Count of each term (lowercased, normalized)
         total_terms: Total number of terms in document
         unique_terms: Number of unique terms
+        tokens: The document's terms in order (for phrase counting)
     """
 
     term_counts: Counter[str]
     total_terms: int
     unique_terms: int
+    tokens: list[str] = field(default_factory=list)
 
     @classmethod
     def from_text(cls, text: str) -> "DocumentStats":
@@ -36,7 +43,7 @@ class DocumentStats:
             DocumentStats instance
         """
         # Tokenize: split on whitespace and punctuation
-        tokens = re.findall(r"\b\w+\b", text.lower())
+        tokens = tokenize(text)
 
         term_counts = Counter(tokens)
         total_terms = len(tokens)
@@ -46,6 +53,7 @@ class DocumentStats:
             term_counts=term_counts,
             total_terms=total_terms,
             unique_terms=unique_terms,
+            tokens=tokens,
         )
 
     def term_frequency(self, term: str) -> int:
@@ -58,6 +66,20 @@ class DocumentStats:
             Number of occurrences
         """
         return self.term_counts.get(term.lower(), 0)
+
+    def phrase_frequency(self, phrase_tokens: list[str]) -> int:
+        """Number of times a sequence of terms occurs in the document."""
+        n = len(phrase_tokens)
+        if n == 0:
+            return 0
+        if n == 1:
+            return self.term_counts.get(phrase_tokens[0], 0)
+        first = phrase_tokens[0]
+        return sum(
+            1
+            for i, token in enumerate(self.tokens)
+            if token == first and self.tokens[i : i + n] == phrase_tokens
+        )
 
     def term_frequency_normalized(self, term: str) -> float:
         """Get normalized term frequency (TF).
@@ -133,8 +155,10 @@ class RarityScorer:
         Returns:
             Rarity score (higher = rarer = more sensitive)
         """
-        freq = doc_stats.term_frequency(term)
+        return self._score_frequency(doc_stats.term_frequency(term), doc_stats)
 
+    def _score_frequency(self, freq: int, doc_stats: DocumentStats) -> float:
+        """Rarity of something that occurs ``freq`` times in the document."""
         if freq == 0:
             # Term not in document - treat as maximally rare
             return self.max_score
@@ -150,7 +174,7 @@ class RarityScorer:
             score = 0.5
 
         # Boost for hapax legomena
-        if doc_stats.is_hapax(term):
+        if freq == 1:
             score += self.hapax_boost
 
         # Clamp to range
@@ -170,23 +194,20 @@ class RarityScorer:
         Returns:
             Combined rarity score
         """
-        # Score the full phrase
-        phrase_score = self.score(phrase.lower().replace(" ", "_"), doc_stats)
+        # An entity is rarely one term: "New York", "bob@example.com" and
+        # "555-123-4567" are all several. Count the term sequence, so that a
+        # phrase repeated throughout the document is not scored as unseen.
+        terms = tokenize(phrase)
+        if len(terms) <= 1:
+            return self.score(terms[0] if terms else phrase, doc_stats)
 
-        # Score individual words
-        words = phrase.lower().split()
-        if not words:
-            return phrase_score
+        phrase_score = self._score_phrase(terms, doc_stats)
+        avg_word_score = sum(self.score(term, doc_stats) for term in terms) / len(terms)
+        # 70% phrase score, 30% word average
+        return 0.7 * phrase_score + 0.3 * avg_word_score
 
-        word_scores = [self.score(word, doc_stats) for word in words]
-        avg_word_score = sum(word_scores) / len(word_scores)
-
-        # Combine: weight phrase score higher if it's a true multi-word entity
-        if len(words) > 1:
-            # Multi-word phrases: 70% phrase score, 30% word average
-            return 0.7 * phrase_score + 0.3 * avg_word_score
-        else:
-            return phrase_score
+    def _score_phrase(self, terms: list[str], doc_stats: DocumentStats) -> float:
+        return self._score_frequency(doc_stats.phrase_frequency(terms), doc_stats)
 
 
 def _default_zipf() -> "Callable[[str], float] | None":
@@ -268,8 +289,17 @@ class GlobalRarityScorer(RarityScorer):
         Returns:
             Adjusted rarity score
         """
-        base_score = super().score(term, doc_stats)
-        term_lower = term.lower()
+        return self._adjust(term.lower(), super().score(term, doc_stats))
+
+    def _score_phrase(self, terms: list[str], doc_stats: DocumentStats) -> float:
+        score = super()._score_phrase(terms, doc_stats)
+        if self.zipf_fn is not None:
+            # A specific multi-term phrase is as good as unseen in any corpus
+            score = 0.5 * score + 0.5
+        return max(self.min_score, min(self.max_score, score))
+
+    def _adjust(self, term_lower: str, base_score: float) -> float:
+        """Blend in corpus rarity and apply the common-word/name penalties."""
 
         # Blend in corpus rarity when a frequency source is available.
         # Zipf 6+ (very common) -> 0, Zipf <= 1 (essentially unseen) -> 1.

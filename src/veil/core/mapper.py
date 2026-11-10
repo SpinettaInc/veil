@@ -19,8 +19,8 @@ _WS_RE = re.compile(r"\s+")
 # bracket style, so text that already contains "[PERSON_1]" never collides
 # with a token we generate.
 TOKEN_LIKE_RE = re.compile(
-    r"[\[<{]\s*(?P<btype>[A-Za-z][A-Za-z_ ]{1,30}?)[\s_-]*(?P<bnum>\d{1,6})\s*[\]>}]"
-    r"|(?<![A-Za-z0-9_])(?P<type>[A-Z][A-Z_]{2,30}?)_(?P<num>\d{1,6})(?![A-Za-z0-9_])"
+    r"[\[<{]\s*(?P<btype>[A-Za-z][A-Za-z0-9_ ]{1,30}?)[\s_-]*(?P<bnum>\d{1,6})\s*[\]>}]"
+    r"|(?<![A-Za-z0-9_])(?P<type>[A-Z][A-Z0-9_]{2,30}?)_(?P<num>\d{1,6})(?![A-Za-z0-9_])"
 )
 
 
@@ -44,8 +44,42 @@ def token_spans(text: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in TOKEN_LIKE_RE.finditer(text)]
 
 
+# The type name may contain digits (custom labels such as "SKU2")
+_TOKEN_SHAPE_RE = re.compile(r"^([\[<{])\s*([A-Za-z][A-Za-z0-9_ ]*?)[\s_-]*(\d+)\s*([\]>}])$")
+_LETTER = r"[^\W\d_]"
+
+
+def replacement_pattern(replacement: str) -> str:
+    """Regex that finds one replacement string in model output.
+
+    Token-shaped replacements ("[CREDIT_CARD_2]") accept any bracket style
+    or none, any case, and "_", "-" or spaces between the parts, but the
+    number must be exact and not followed by more digits — LLMs routinely
+    rewrite tokens as "EMAIL_1", "[email 1]" or "<Person_2>". Anything else
+    (faker/semantic values) is matched literally and case-sensitively, and
+    not inside a longer word.
+    Compile with ``re.IGNORECASE``.
+    """
+    m = _TOKEN_SHAPE_RE.match(replacement)
+    if not m:
+        # A fake value is not restored from inside a longer word ("West" in
+        # "Western"). Only letters guard: an entity may legitimately touch
+        # digits or punctuation ("2024-01-15T10:30").
+        before = f"(?<!{_LETTER})" if re.match(_LETTER, replacement) else ""
+        after = f"(?!{_LETTER})" if re.search(_LETTER + "$", replacement) else ""
+        return f"(?-i:{before}{re.escape(replacement)}{after})"
+    _, type_name, number, _ = m.groups()
+    type_pat = r"[\s_-]*".join(re.escape(part) for part in re.split(r"[\s_]+", type_name.strip()))
+    return rf"(?<![A-Za-z0-9_])(?:[\[<{{]\s*)?{type_pat}[\s_-]*{number}(?!\d)(?:\s*[\]>}}])?"
+
+
 # NER labels a bare surname as any of these
 _SURNAME_CONFUSABLE_TYPES = frozenset({EntityType.ORG, EntityType.GPE, EntityType.LOC})
+
+
+# Values where case carries meaning: two URLs that differ only in case are
+# different resources, and restoring one as the other would break the link.
+_CASE_SENSITIVE_TYPES = frozenset({EntityType.URL, EntityType.CUSTOM})
 
 
 def normalize_original(text: str, entity_type: EntityType | None = None) -> str:
@@ -53,9 +87,12 @@ def normalize_original(text: str, entity_type: EntityType | None = None) -> str:
 
     Casefolds, collapses whitespace, and for people strips honorifics and a
     trailing possessive, so "Dr. John Smith", "john smith" and "John Smith's"
-    all resolve to the same mapping.
+    all resolve to the same mapping. URLs and custom-pattern values keep
+    their case.
     """
     key = _WS_RE.sub(" ", text.strip())
+    if entity_type in _CASE_SENSITIVE_TYPES:
+        return key
     if entity_type in (EntityType.PERSON, None):
         key = _TITLE_RE.sub("", key)
         key = _POSSESSIVE_RE.sub("", key)
@@ -282,7 +319,21 @@ class MappingStore:
         Returns:
             MappingEntry, or None if not found
         """
-        return self._forward.get(normalize_original(original))
+        with self._lock:
+            return self._lookup(original)
+
+    def _lookup(self, original: str) -> MappingEntry | None:
+        """Untyped lookup: try the person-style key, then the plain one.
+
+        Entries are stored under a key normalised for their own type, so
+        "McDonald's" (ORG) keeps its "'s" while "Smith's" (PERSON) loses it.
+        A caller that does not know the type has to try both.
+        """
+        entry = self._forward.get(normalize_original(original))
+        for as_type in (EntityType.UNKNOWN, EntityType.URL):
+            if entry is None:
+                entry = self._forward.get(normalize_original(original, as_type))
+        return entry
 
     def get_entry_by_replacement(self, replacement: str) -> MappingEntry | None:
         """Get the full mapping entry for a replacement.
@@ -315,7 +366,7 @@ class MappingStore:
         Returns:
             True if mapping exists
         """
-        return normalize_original(original) in self._forward
+        return self.get_entry(original) is not None
 
     def has_replacement(self, replacement: str) -> bool:
         """Check if a replacement text exists.
@@ -363,6 +414,24 @@ class MappingStore:
             )
         return same_label + 1
 
+    def restore(self, text: str) -> tuple[str, int]:
+        """Put the originals back into ``text``.
+
+        A single compiled alternation, longest replacement first so
+        "[PERSON_1]" can never be matched inside "[PERSON_12]".
+
+        Returns:
+            The restored text and the number of replacements made
+        """
+        entries = sorted(self, key=lambda e: -len(e.replacement))
+        if not text or not entries:
+            return text, 0
+        pattern = re.compile(
+            "|".join(f"({replacement_pattern(e.replacement)})" for e in entries),
+            re.IGNORECASE,
+        )
+        return pattern.subn(lambda m: entries[(m.lastindex or 1) - 1].original, text)
+
     def clear(self) -> None:
         """Clear all mappings."""
         with self._lock:
@@ -384,7 +453,7 @@ class MappingStore:
 
     def __contains__(self, original: str) -> bool:
         """Check if an original text has a mapping."""
-        return normalize_original(original) in self._forward
+        return self.get_entry(original) is not None
 
     def to_dict(self) -> dict[str, list[dict[str, Any]]]:
         """Export mappings to a dictionary.
