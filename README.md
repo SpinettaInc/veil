@@ -1,5 +1,20 @@
 # Veil 🥷💨
 
+[![CI](https://github.com/SpinettaInc/veil/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/SpinettaInc/veil/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Open issues](https://img.shields.io/github/issues/SpinettaInc/veil)](https://github.com/SpinettaInc/veil/issues)
+[![Open pull requests](https://img.shields.io/github/issues-pr/SpinettaInc/veil)](https://github.com/SpinettaInc/veil/pulls)
+[![Last commit](https://img.shields.io/github/last-commit/SpinettaInc/veil)](https://github.com/SpinettaInc/veil/commits/master)
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![spaCy](https://img.shields.io/badge/NER-spaCy-09A3D5?logo=spacy&logoColor=white)](https://spacy.io)
+[![Presidio](https://img.shields.io/badge/PII-Presidio%20(optional)-0078D4)](https://microsoft.github.io/presidio/)
+[![Typer](https://img.shields.io/badge/CLI-Typer-009688)](https://typer.tiangolo.com)
+[![Gradio](https://img.shields.io/badge/app-Gradio%20(optional)-F97316)](https://www.gradio.app)
+[![Ruff](https://img.shields.io/badge/lint-Ruff-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
+[![mypy: strict](https://img.shields.io/badge/types-mypy%20strict-2A6DB2)](https://mypy-lang.org)
+[![Docs: MkDocs](https://img.shields.io/badge/docs-MkDocs-526CFE?logo=materialformkdocs&logoColor=white)](docs/index.md)
+
 Privacy-preserving proxy for LLMs. Anonymize sensitive data before sending to AI, get it back in responses.
 
 ## What it does
@@ -31,6 +46,13 @@ veil anonymize "John Smith, john@example.com"
 # Detect without changing
 veil detect "My phone is 555-123-4567"
 
+# Save the mappings, then restore a reply later
+veil anonymize "John Smith, john@example.com" --json -o mappings.json
+veil reconstruct "Dear [PERSON_1], ..." --mapping mappings.json
+
+# Show which detectors and models a profile runs with
+veil stats --profile paranoid
+
 # Launch desktop app
 veil app
 ```
@@ -59,6 +81,7 @@ print(response.reconstructed_response)  # Original values restored
 
 # Follow-ups reuse the same tokens; the proxy keeps the (anonymized)
 # conversation history itself, so the provider never sees originals.
+# A system prompt and any history you pass in are anonymized too.
 proxy.chat("What did I just tell you?")
 
 # Streaming yields already-reconstructed text
@@ -98,6 +121,9 @@ aggregates a log for compliance reporting.
 
 ```python
 results = pipeline.anonymize_batch(docs, separate_sessions=True)  # spaCy runs batched
+
+# With separate sessions each result keeps its own mappings
+restored = pipeline.reconstruct(reply, mapping_store=results[0].mapping_store)
 ```
 
 ### Fail closed
@@ -106,7 +132,8 @@ If a requested detector cannot be loaded (spaCy model missing, Presidio not
 installed) Veil raises `DetectionUnavailableError` instead of silently
 anonymizing less. Pass `strict=False` to `VeilPipeline`/`VeilProxy` to run
 degraded; results then carry `degraded=True`, and the proxy still refuses to
-send unless `allow_degraded=True`.
+send unless `allow_degraded=True`. A misspelt profile, detection mode or
+replacement mode is an error too, never a quiet fall back to a default.
 
 ## Detection profiles
 
@@ -136,7 +163,7 @@ custom_patterns:
 
 ## What it detects
 
-Names, emails, phones, SSNs, credit cards, addresses, IBANs, IPs, medical records, passport numbers, and more.
+Names, emails, phones, SSNs, credit cards, addresses, IBANs, IPv4/IPv6 addresses, medical records, passport numbers, and more.
 
 Well-known brands and vendors (Amex, Visa, Google, Microsoft, …) are *not*
 anonymized in the `balanced` and `minimal` profiles — naming them identifies
@@ -153,8 +180,8 @@ veil anonymize "John Smith" --mode semantic # James Wilson
 
 Only `token` mode round-trips unambiguously: a fake name can also appear in the
 model's reply on its own and would be "restored" to the real one. Veil never
-picks a fake value that already occurs in your input, but for proxy use prefer
-`token`.
+picks a fake value that already occurs in your input or that it has already
+given to a different original, but for proxy use prefer `token`.
 
 ## Optional dependencies
 
@@ -168,14 +195,24 @@ pip install -e ".[full]"     # Everything
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,faker,rarity]" presidio-analyzer   # what CI installs
+python -m spacy download en_core_web_sm
 pytest -m "not desktop"                  # fast lane
 pytest                                   # everything, incl. Gradio app tests
+ruff check src/ tests/ benchmarks/       # lint
+mypy src/veil/                           # strict type check
 python benchmarks/run.py --corpus all    # precision / recall / latency
+python benchmarks/fuzz.py --trials 100   # randomised round-trip check
 ```
 
-CI runs lint, tests, and the precision benchmark in both detection modes with
-a minimum F1 gate (`.github/workflows/ci.yml`).
+CI runs lint, tests, the precision benchmark in both detection modes with a
+minimum F1 gate, and the round-trip fuzz (`.github/workflows/ci.yml`).
+
+## Documentation
+
+Guides and API reference live in [`docs/`](docs/index.md) (`mkdocs serve` to
+browse them locally), runnable examples in [`examples/`](examples/README.md),
+and release notes in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Roadmap
 
@@ -196,6 +233,13 @@ a minimum F1 gate (`.github/workflows/ci.yml`).
 - [ ] Enterprise features (SSO, team management)
 - [ ] Integration with more frameworks (LangChain, LlamaIndex)
 
+## Contributing
+
+Bugs and feature requests go to the
+[issue tracker](https://github.com/SpinettaInc/veil/issues). For a detection
+change, add the failing case to `benchmarks/gold_hard.py` first and run the
+benchmark in both modes before and after.
+
 ## License
 
-MIT
+GNU General Public License v3.0 — see [`LICENSE`](LICENSE).
