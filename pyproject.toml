@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Privacy-preserving proxy for LLMs - anonymize sensitive data before sending to AI"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-only"}
 authors = [
     {name = "Veil Contributors"}
 ]
@@ -12,7 +12,7 @@ keywords = ["privacy", "llm", "anonymization", "pii", "nlp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
