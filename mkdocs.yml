@@ -79,6 +79,13 @@ nav:
   - Integrations:
       - LLM Providers: integrations/llm-providers.md
       - Guardrails AI: integrations/guardrails.md
+  - Agent Skill:
+      - Overview: agent-skill/index.md
+      - Installation: agent-skill/installation.md
+      - Workflow: agent-skill/workflow.md
+      - Helper Script: agent-skill/helper-script.md
+      - Choosing Options: agent-skill/choosing-options.md
+      - Troubleshooting: agent-skill/troubleshooting.md
   - API Reference:
       - Pipeline: api/pipeline.md
       - Detection: api/detection.md
