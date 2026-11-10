@@ -135,6 +135,26 @@ degraded; results then carry `degraded=True`, and the proxy still refuses to
 send unless `allow_degraded=True`. A misspelt profile, detection mode or
 replacement mode is an error too, never a quiet fall back to a default.
 
+## Agent skill
+
+[`skills/veil/`](skills/veil/SKILL.md) teaches an AI coding agent to use Veil:
+run it on a file by path, read only the anonymized copy, and restore the
+originals into a file it does not read back. It is plain Markdown plus one
+script, so it works with any model and any runtime that can run a shell
+command.
+
+```bash
+ln -s "$PWD/skills/veil" ~/.claude/skills/veil     # or your agent's skills directory
+
+python skills/veil/scripts/veil_tool.py anonymize notes.txt \
+    --out work/notes.anon.txt --session work/session.json      # prints counts only
+python skills/veil/scripts/veil_tool.py reconstruct work/reply.md \
+    --out reply.md --session work/session.json
+```
+
+See [the agent skill guide](docs/agent-skill/index.md) for other
+runtimes and the full command list.
+
 ## Detection profiles
 
 - `paranoid` - Catches everything, might over-detect

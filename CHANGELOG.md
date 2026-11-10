@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Agent skill
+- `skills/veil/`: an Agent Skill (instructions, reference pages and `scripts/veil_tool.py`) that lets an AI agent anonymize files by path, work on the anonymized copy and reconstruct the result without reading the originals. The helper prints counts, offsets and scores only; session files are written `0600`.
+
 ### Precision
 - Overlap resolution ranks by type specificity (structured PII > named entity > generic NER label), then confidence, then length; hybrid agreement groups use the same rank.
 - Loose regexes (bank account, ZIP codes, generic phone, driver licence) require a nearby cue word; IBANs are mod-97 validated and accept spaces; phones with parentheses/`+` and DD/MM/YYYY / ISO-timestamp dates are recognised.
