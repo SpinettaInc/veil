@@ -1,5 +1,6 @@
 """Token-based replacement strategy for anonymizing entities."""
 
+import re
 from typing import Protocol
 
 from veil.core.mapper import MappingStore
@@ -121,7 +122,9 @@ class TokenReplacer:
 
     def _render(self, entity_type: EntityType, number: int, label: str | None = None) -> str:
         if self.include_type:
-            type_name = label or entity_type.value
+            # Separators inside a custom label become "_" so the token keeps
+            # the shape tolerant reconstruction recognises ("EMPLOYEE-ID")
+            type_name = re.sub(r"[\s-]+", "_", label.strip()) if label else entity_type.value
             if self.uppercase:
                 type_name = type_name.upper()
             token_content = f"{type_name}_{number}"
@@ -176,56 +179,6 @@ class TokenReplacer:
             return None
 
         return (type_name, number)
-
-
-class AnonymizationResult:
-    """Result of anonymizing text.
-
-    Attributes:
-        original_text: The original input text
-        anonymized_text: The anonymized output text
-        entities: List of detected entities
-        mapping_store: Store with all mappings used
-    """
-
-    def __init__(
-        self,
-        original_text: str,
-        anonymized_text: str,
-        entities: list[Entity],
-        mapping_store: MappingStore,
-    ) -> None:
-        """Initialize the result.
-
-        Args:
-            original_text: Original input text
-            anonymized_text: Anonymized output text
-            entities: Detected entities
-            mapping_store: Mapping store used
-        """
-        self.original_text = original_text
-        self.anonymized_text = anonymized_text
-        self.entities = entities
-        self.mapping_store = mapping_store
-
-    @property
-    def entity_count(self) -> int:
-        """Number of entities detected."""
-        return len(self.entities)
-
-    @property
-    def replacements(self) -> dict[str, str]:
-        """Dictionary of original -> replacement mappings."""
-        return {
-            entry.original: entry.replacement
-            for entry in self.mapping_store
-        }
-
-    def __repr__(self) -> str:
-        return (
-            f"AnonymizationResult(entities={self.entity_count}, "
-            f"mappings={len(self.mapping_store)})"
-        )
 
 
 def apply_replacements(

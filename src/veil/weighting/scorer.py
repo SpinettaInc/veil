@@ -48,7 +48,6 @@ class PrivacyScore:
         entity: The entity being scored
         total_score: Final combined score (0.0 to 1.0)
         base_score: Score from entity type weight
-        pos_multiplier: Multiplier from POS tag
         rarity_boost: Boost from term rarity
         context_boost: Boost from context patterns
         relationship_boost: Boost from entity relationships
@@ -60,7 +59,6 @@ class PrivacyScore:
     entity: Entity
     total_score: float
     base_score: float
-    pos_multiplier: float
     rarity_boost: float
     context_boost: float
     relationship_boost: float
@@ -75,7 +73,6 @@ class PrivacyScore:
             "entity_type": self.entity.entity_type.value,
             "total_score": round(self.total_score, 3),
             "base_score": round(self.base_score, 3),
-            "pos_multiplier": round(self.pos_multiplier, 2),
             "rarity_boost": round(self.rarity_boost, 3),
             "context_boost": round(self.context_boost, 3),
             "relationship_boost": round(self.relationship_boost, 3),
@@ -92,13 +89,13 @@ class PrivacyScorer:
     an entity is and whether it should be anonymized:
 
     1. **Entity Type Weight**: Base score from entity type (PERSON=0.95, etc.)
-    2. **POS Multiplier**: Adjust based on part-of-speech (proper nouns=1.2)
+    2. **Detector confidence**: weak detections don't get the full type weight
     3. **Rarity Boost**: Rare terms are more identifying (TF-IDF inspired)
     4. **Context Boost**: Sensitive context patterns increase score
     5. **Relationship Boost**: Relationships between entities add sensitivity
 
     Final score formula:
-        score = (base * pos_mult) + (rarity * rarity_factor) + context + relationship
+        score = (base * confidence_factor) + (rarity * rarity_factor) + context + relationship
 
     Example:
         >>> scorer = PrivacyScorer()
@@ -163,7 +160,6 @@ class PrivacyScorer:
         entity: Entity,
         full_text: str,
         all_entities: list[Entity] | None = None,
-        pos_tag: str | None = None,
         relationship_boost: float | None = None,
     ) -> PrivacyScore:
         """Calculate privacy score for an entity.
@@ -172,7 +168,6 @@ class PrivacyScorer:
             entity: Entity to score
             full_text: Full document text (for context/rarity analysis)
             all_entities: All entities in document (for relationship analysis)
-            pos_tag: Part-of-speech tag (if known from NLP)
             relationship_boost: Precomputed relationship boost (skips the
                 per-entity relationship scan; used by ``score_entities``)
 
@@ -191,16 +186,6 @@ class PrivacyScorer:
             f"Entity type {entity.entity_type.value}: {base_score:.2f}"
         )
 
-        # 2. POS multiplier
-        pos_multiplier = 1.0
-        if pos_tag:
-            pos_multiplier = self.config.get_pos_multiplier(pos_tag)
-            if pos_multiplier != 1.0:
-                contributing_factors.append(
-                    f"POS tag {pos_tag}: x{pos_multiplier:.2f}"
-                )
-
-        # 3. Rarity boost
         doc_stats = self._get_doc_stats(full_text)
         rarity_raw = self.rarity_scorer.score_multi_word(entity.text, doc_stats)
         rarity_boost = rarity_raw * self.config.rarity_factor
@@ -246,7 +231,7 @@ class PrivacyScorer:
 
         # Calculate total score
         total_score = (
-            (base_score * pos_multiplier * confidence_factor)
+            (base_score * confidence_factor)
             + rarity_boost + context_boost + relationship_boost
         )
 
@@ -260,7 +245,6 @@ class PrivacyScorer:
             entity=entity,
             total_score=total_score,
             base_score=base_score,
-            pos_multiplier=pos_multiplier,
             rarity_boost=rarity_boost,
             context_boost=context_boost,
             relationship_boost=relationship_boost,

@@ -68,7 +68,6 @@ class WeightConfig:
 
     Attributes:
         entity_weights: Base weights by entity type (0.0 to 1.0)
-        pos_multipliers: Multipliers by part-of-speech tag
         context_patterns: Patterns that boost sensitivity when nearby
         threshold: Minimum score to trigger anonymization
         rarity_factor: How much rarity affects the score (0.0 to 1.0)
@@ -78,7 +77,6 @@ class WeightConfig:
     entity_weights: dict[EntityType, float] = field(default_factory=dict)
 
     # POS tag multipliers
-    pos_multipliers: dict[str, float] = field(default_factory=dict)
 
     # Context patterns that boost sensitivity
     context_patterns: list[ContextPattern] = field(default_factory=list)
@@ -112,8 +110,6 @@ class WeightConfig:
         """Initialize defaults if empty."""
         if not self.entity_weights:
             self.entity_weights = self._default_entity_weights()
-        if not self.pos_multipliers:
-            self.pos_multipliers = self._default_pos_multipliers()
         if not self.context_patterns:
             self.context_patterns = self._default_context_patterns()
 
@@ -165,36 +161,6 @@ class WeightConfig:
         }
 
     @staticmethod
-    def _default_pos_multipliers() -> dict[str, float]:
-        """Default multipliers by part-of-speech tag."""
-        return {
-            # Proper nouns are most likely to be identifying
-            "PROPN": 1.2,
-            # Common nouns - baseline
-            "NOUN": 1.0,
-            # Numbers can be identifying
-            "NUM": 0.8,
-            # Adjectives sometimes identifying
-            "ADJ": 0.6,
-            # Verbs rarely identifying
-            "VERB": 0.3,
-            # Adverbs rarely identifying
-            "ADV": 0.3,
-            # Function words - very low
-            "ADP": 0.1,  # Prepositions
-            "AUX": 0.1,  # Auxiliary verbs
-            "CCONJ": 0.1,  # Coordinating conjunctions
-            "DET": 0.1,  # Determiners
-            "PART": 0.1,  # Particles
-            "PRON": 0.2,  # Pronouns
-            "SCONJ": 0.1,  # Subordinating conjunctions
-            # Punctuation/symbols
-            "PUNCT": 0.0,
-            "SYM": 0.2,
-            "X": 0.3,  # Other
-        }
-
-    @staticmethod
     def _default_context_patterns() -> list[ContextPattern]:
         """Default context patterns that boost sensitivity."""
         return [
@@ -222,7 +188,7 @@ class WeightConfig:
             ),
             # Financial context
             ContextPattern.from_string(
-                r"\baccount\s*(?:number|#|no\.?)?", 0.20, "Account number context"
+                r"\baccounts?\b\s*(?:number|#|no\.?)?", 0.20, "Account number context"
             ),
             ContextPattern.from_string(r"\bsocial\s*security", 0.25, "Social security context"),
             ContextPattern.from_string(r"\b(?:credit|debit)\s*card", 0.15, "Credit card context"),
@@ -265,10 +231,6 @@ class WeightConfig:
             return self.public_entity_weight
         return self.entity_weights.get(entity_type, 0.3)
 
-    def get_pos_multiplier(self, pos_tag: str) -> float:
-        """Get the multiplier for a POS tag."""
-        return self.pos_multipliers.get(pos_tag, 1.0)
-
     # Pre-configured profiles
 
     # ---- YAML profiles -------------------------------------------------
@@ -278,7 +240,7 @@ class WeightConfig:
         """Load a profile from a YAML file.
 
         Recognised keys: ``threshold``, ``rarity_factor``, ``context_window``,
-        ``entity_weights`` (EntityType name -> weight), ``pos_multipliers``,
+        ``entity_weights`` (EntityType name -> weight),
         ``context_patterns`` (list of ``{pattern, boost, description}``) and
         ``custom_patterns`` (see ``veil.detection.patterns.pattern_from_dict``).
         Missing sections fall back to the built-in defaults, so a custom
@@ -320,9 +282,6 @@ class WeightConfig:
         ]
         config = cls(
             entity_weights=weights,
-            pos_multipliers={
-                str(k): float(v) for k, v in (data.get("pos_multipliers") or {}).items()
-            },
             context_patterns=patterns,
             threshold=float(data.get("threshold", 0.5)),
             rarity_factor=float(data.get("rarity_factor", 0.1)),
@@ -351,7 +310,6 @@ class WeightConfig:
                 **{t.value: round(w, 3) for t, w in self.entity_weights.items()},
                 **self.custom_weights,
             },
-            "pos_multipliers": dict(self.pos_multipliers),
             "context_patterns": [
                 {"pattern": p.pattern.pattern, "boost": p.boost, "description": p.description}
                 for p in self.context_patterns
@@ -416,6 +374,16 @@ _BUILTIN_CONFIGS = {
     DetectionProfile.BALANCED: get_balanced_config,
     DetectionProfile.MINIMAL: get_minimal_config,
 }
+
+
+def parse_profile(name: str) -> DetectionProfile:
+    """Profile name to enum. A typo is an error, never a quiet fall back to a
+    weaker profile than the caller asked for."""
+    try:
+        return DetectionProfile(name.lower())
+    except ValueError:
+        valid = ", ".join(p.value for p in DetectionProfile)
+        raise ValueError(f"Invalid profile '{name}'. Choose from: {valid}") from None
 
 
 def get_profile_config(profile: DetectionProfile) -> WeightConfig:

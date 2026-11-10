@@ -531,10 +531,8 @@ class TestPipelineWithReplacementModes:
         assert pipeline._replacement_mode == "faker"
 
     def test_pipeline_invalid_mode(self):
-        """Test pipeline with invalid mode falls back to token."""
+        """An unknown mode is rejected rather than silently becoming token mode."""
         from veil.core.pipeline import VeilPipeline
 
-        pipeline = VeilPipeline(replacement_mode="invalid")
-
-        # Should fall back to token mode
-        assert pipeline.replacement_engine.mode == ReplacementMode.TOKEN
+        with pytest.raises(ValueError, match="Invalid mode"):
+            VeilPipeline(replacement_mode="invalid")

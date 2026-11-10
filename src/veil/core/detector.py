@@ -82,7 +82,8 @@ class EntityDetector:
         try:
             self.mode = DetectionMode(mode.lower())
         except ValueError:
-            self.mode = DetectionMode.STANDARD
+            valid = ", ".join(m.value for m in DetectionMode)
+            raise ValueError(f"Invalid detection mode '{mode}'. Choose from: {valid}") from None
 
         # Enable hybrid mode if presidio is requested or mode is hybrid
         if use_presidio or self.mode == DetectionMode.HYBRID:
@@ -113,6 +114,10 @@ class EntityDetector:
                 self._degrade(f"Could not initialize hybrid detector: {e}; using standard mode")
                 self.mode = DetectionMode.STANDARD
             else:
+                # A backend the hybrid detector had to drop is a degradation
+                # here too: hybrid mode must not be weaker than it claims.
+                for reason in self.hybrid_detector.unavailable:
+                    self._degrade(reason, announce=False)
                 if self.use_presidio and not PRESIDIO_AVAILABLE:
                     self._degrade("Presidio requested but presidio-analyzer is not installed")
 
@@ -138,10 +143,11 @@ class EntityDetector:
             if use_patterns:
                 self.pattern_detector = PatternDetector()
 
-    def _degrade(self, reason: str) -> None:
+    def _degrade(self, reason: str, announce: bool = True) -> None:
         if self.strict:
             raise DetectionUnavailableError(reason)
-        print(f"Warning: {reason}")
+        if announce:
+            print(f"Warning: {reason}")
         self.degraded = True
         self.degradation_reasons.append(reason)
 

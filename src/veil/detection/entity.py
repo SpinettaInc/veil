@@ -1,5 +1,6 @@
 """Entity data model for detected sensitive information."""
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -164,8 +165,10 @@ def merge_overlapping_entities(entities: list[Entity]) -> list[Entity]:
 
     When two entities overlap the winner is chosen by, in order:
     type specificity (structured PII > named entity > generic NER label),
-    confidence, then span length. Runs in O(n log n): after sorting by
-    start position a new entity can only overlap the last kept one.
+    confidence, then span length; ties go to the earlier span. Entities are
+    accepted best-first, so a span is only ever dropped because of an entity
+    that is actually kept (a chain A-B-C of pairwise overlaps keeps A and C
+    when B loses to C, rather than discarding A along with B).
 
     Args:
         entities: List of entities to merge
@@ -176,14 +179,19 @@ def merge_overlapping_entities(entities: list[Entity]) -> list[Entity]:
     if not entities:
         return []
 
-    sorted_entities = sorted(entities, key=lambda e: (e.start, -(e.end - e.start)))
+    def best_first(entity: Entity) -> tuple[int, float, int, int]:
+        specificity, confidence, length = _rank(entity)
+        return (-specificity, -confidence, -length, entity.start)
 
-    merged: list[Entity] = []
-    for entity in sorted_entities:
-        if merged and entity.overlaps(merged[-1]):
-            if _rank(entity) > _rank(merged[-1]):
-                merged[-1] = entity
+    kept: list[Entity] = []
+    starts: list[int] = []
+    for entity in sorted(entities, key=best_first):
+        i = bisect_right(starts, entity.start)
+        if i > 0 and entity.overlaps(kept[i - 1]):
             continue
-        merged.append(entity)
+        if i < len(kept) and entity.overlaps(kept[i]):
+            continue
+        kept.insert(i, entity)
+        starts.insert(i, entity.start)
 
-    return merged
+    return kept

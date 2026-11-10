@@ -1,6 +1,5 @@
 """Main Veil pipeline for text anonymization and reconstruction."""
 
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -89,6 +88,14 @@ def _drop_inside_tokens(entities: list[Entity], text: str) -> list[Entity]:
     ]
 
 
+def _parse_replacement_mode(mode: str) -> ReplacementMode:
+    try:
+        return ReplacementMode(mode.lower())
+    except ValueError:
+        valid = ", ".join(m.value for m in ReplacementMode)
+        raise ValueError(f"Invalid mode '{mode}'. Choose from: {valid}") from None
+
+
 class VeilPipeline:
     """Main pipeline for text anonymization and reconstruction.
 
@@ -162,8 +169,6 @@ class VeilPipeline:
         self.audit = audit
         self.profile = profile
         self.use_weighting = use_weighting
-        self._replacement_mode = replacement_mode
-        self._detection_mode = detection_mode
 
         self.detector = EntityDetector(
             use_ner=use_ner,
@@ -189,11 +194,10 @@ class VeilPipeline:
             for spec in config_for_patterns.custom_patterns:
                 self.add_pattern(pattern_from_dict(spec))
 
-        # Initialize replacement engine
-        try:
-            mode = ReplacementMode(replacement_mode.lower())
-        except ValueError:
-            mode = ReplacementMode.TOKEN
+        # Initialize replacement engine. An unknown mode is an error, not a
+        # silent fall back to tokens: the caller asked for something specific.
+        mode = _parse_replacement_mode(replacement_mode)
+        self._replacement_mode = mode.value
 
         self.replacement_engine = ReplacementEngine(
             mode=mode,
@@ -203,6 +207,9 @@ class VeilPipeline:
             similarity_threshold=semantic_threshold,
         )
         self.mapping_store = MappingStore()
+        # Reported in the audit log: the mode actually in effect (use_presidio
+        # forces hybrid; a non-strict hybrid failure falls back to standard).
+        self._detection_mode = self.detector.mode.value
 
     def anonymize(
         self,
@@ -231,17 +238,34 @@ class VeilPipeline:
                 degraded=self.detector.degraded,
             )
 
+        return self._anonymize_one(text, entity_types)
+
+    def _anonymize_one(
+        self,
+        text: str,
+        entity_types: list[EntityType] | None,
+        ner_entities: list[Entity] | None = None,
+    ) -> AnonymizationResult:
+        """Detect and finish one non-empty text.
+
+        ``ner_entities`` is the NER pass for this text when it has already
+        been run in a batch (standard mode only); pattern detection and the
+        merge still happen here so both paths produce identical results.
+        """
         started = time.perf_counter()
         # Never generate a token that the input already contains verbatim
         self.mapping_store.block_tokens_in(text)
 
-        # Detect entities
-        if entity_types:
-            all_entities = self.detector.detect_by_type(text, entity_types)
+        if ner_entities is None:
+            entities = self.detector.detect(text)
         else:
-            all_entities = self.detector.detect(text)
-        all_entities = _drop_inside_tokens(all_entities, text)
-        return self._finish(text, all_entities, started)
+            entities = list(ner_entities)
+            if self.detector.use_patterns and self.detector.pattern_detector:
+                entities.extend(self.detector.pattern_detector.detect(text))
+            entities = self.detector.finalize(entities, text)
+        if entity_types:
+            entities = [e for e in entities if e.entity_type in entity_types]
+        return self._finish(text, _drop_inside_tokens(entities, text), started)
 
     def _finish(self, text: str, entities: list[Entity], started: float) -> AnonymizationResult:
         """Score, replace, build the result and audit — shared by single and batch paths."""
@@ -287,14 +311,16 @@ class VeilPipeline:
         Returns:
             List of privacy scores for all detected entities
         """
-        entities = self.detector.detect(text)
+        entities = _drop_inside_tokens(self.detector.detect(text), text)
 
         if not self.scorer or not entities:
             return []
 
         return self.scorer.score_entities(entities, text)
 
-    def reconstruct(self, text: str) -> ReconstructionResult:
+    def reconstruct(
+        self, text: str, mapping_store: MappingStore | None = None
+    ) -> ReconstructionResult:
         """Reconstruct anonymized text by replacing tokens with originals.
 
         This is the reverse of anonymize() - it replaces tokens like
@@ -302,49 +328,22 @@ class VeilPipeline:
 
         Args:
             text: Anonymized text to reconstruct
+            mapping_store: Mappings to restore from. Defaults to the
+                pipeline's current session; pass ``result.mapping_store`` to
+                reconstruct a document from ``anonymize_batch(...,
+                separate_sessions=True)``.
 
         Returns:
             ReconstructionResult with reconstructed text
         """
-        if not text:
-            return ReconstructionResult(
-                anonymized_text=text,
-                reconstructed_text=text,
-                replacements_made=0,
-            )
-
-        started = time.perf_counter()
-        entries = list(self.mapping_store)
-        if not entries:
+        store = self.mapping_store if mapping_store is None else mapping_store
+        if not text or len(store) == 0:
             return ReconstructionResult(
                 anonymized_text=text, reconstructed_text=text, replacements_made=0
             )
 
-        # One alternation, longest replacement first so "[PERSON_1]" can never
-        # be matched inside "[PERSON_12]". Token-style replacements are matched
-        # tolerantly (see _token_pattern): LLMs routinely drop brackets or
-        # change case ("EMAIL_1", "[email 1]", "<Person_2>").
-        lookup: dict[str, str] = {}
-        alternatives: list[str] = []
-        for entry in sorted(entries, key=lambda e: -len(e.replacement)):
-            lookup[entry.replacement] = entry.original
-            alternatives.append(
-                f"(?P<g{len(alternatives)}>{self._token_pattern(entry.replacement)})"
-            )
-        group_to_original = {
-            f"g{i}": lookup[e.replacement]
-            for i, e in enumerate(sorted(entries, key=lambda e: -len(e.replacement)))
-        }
-        pattern = re.compile("|".join(alternatives), re.IGNORECASE)
-
-        replacements_made = 0
-
-        def _restore(match: "re.Match[str]") -> str:
-            nonlocal replacements_made
-            replacements_made += 1
-            return group_to_original[match.lastgroup or ""]
-
-        result = pattern.sub(_restore, text)
+        started = time.perf_counter()
+        result, replacements_made = store.restore(text)
         if self.audit is not None:
             self.audit.log_reconstruct(
                 text_chars=len(text),
@@ -369,8 +368,10 @@ class VeilPipeline:
         Args:
             texts: Documents to anonymize
             entity_types: Optional restriction, as for ``anonymize``
-            separate_sessions: Clear the mapping store before each document so
-                token numbering restarts and nothing links documents together
+            separate_sessions: Give each document its own mapping store so
+                token numbering restarts and nothing links documents together.
+                Each result keeps its store (``result.mapping_store``); pass
+                it to ``reconstruct`` to restore that document.
 
         Returns:
             One AnonymizationResult per input, in order
@@ -385,44 +386,23 @@ class VeilPipeline:
         results = []
         for i, text in enumerate(texts):
             if separate_sessions:
-                self.clear_mappings()
-            if ner_batches is None:
+                self._new_session()
+            if not text or ner_batches is None:
                 results.append(self.anonymize(text, entity_types))
-                continue
-            # Same steps as anonymize(), with the NER pass already done
-            if not text:
-                results.append(self.anonymize(text, entity_types))
-                continue
-            started = time.perf_counter()
-            self.mapping_store.block_tokens_in(text)
-            entities = list(ner_batches[i])
-            if self.detector.use_patterns and self.detector.pattern_detector:
-                entities.extend(self.detector.pattern_detector.detect(text))
-            entities = _drop_inside_tokens(self.detector.finalize(entities, text), text)
-            if entity_types:
-                entities = [e for e in entities if e.entity_type in entity_types]
-            results.append(self._finish(text, entities, started))
+            else:
+                results.append(self._anonymize_one(text, entity_types, ner_batches[i]))
         return results
 
-    _TOKEN_SHAPE_RE = re.compile(r"^([\[<{])\s*([A-Za-z][A-Za-z_ ]*?)[\s_-]*(\d+)\s*([\]>}])$")
+    def _new_session(self) -> None:
+        """Start a session on a *new* store, leaving the previous one intact.
 
-    @classmethod
-    def _token_pattern(cls, replacement: str) -> str:
-        """Regex for one replacement string.
-
-        Token-shaped replacements ("[CREDIT_CARD_2]") accept any bracket style
-        or none, any case, and "_", "-" or spaces between the parts, but the
-        number must be exact and not followed by more digits. Anything else
-        (faker/semantic values) is matched literally and case-sensitively.
+        Results hold a reference to the store they were made with, so
+        clearing it in place would wipe the mappings of earlier documents.
         """
-        m = cls._TOKEN_SHAPE_RE.match(replacement)
-        if not m:
-            return f"(?-i:{re.escape(replacement)})"
-        _, type_name, number, _ = m.groups()
-        type_pat = r"[\s_-]*".join(
-            re.escape(part) for part in re.split(r"[\s_]+", type_name.strip())
-        )
-        return rf"(?<![A-Za-z0-9_])(?:[\[<{{]\s*)?{type_pat}[\s_-]*{number}(?!\d)(?:\s*[\]>}}])?"
+        self.mapping_store = MappingStore()
+        if self.scorer:
+            self.scorer.clear_cache()
+        self.replacement_engine.clear_cache()
 
     def process(
         self,
@@ -476,13 +456,9 @@ class VeilPipeline:
         Args:
             mode: New mode ("token", "faker", "semantic")
         """
-        try:
-            new_mode = ReplacementMode(mode.lower())
-            self.replacement_engine.set_mode(new_mode)
-            self._replacement_mode = mode
-        except ValueError:
-            valid = ", ".join([m.value for m in ReplacementMode])
-            raise ValueError(f"Invalid mode '{mode}'. Choose from: {valid}")
+        new_mode = _parse_replacement_mode(mode)
+        self.replacement_engine.set_mode(new_mode)
+        self._replacement_mode = new_mode.value
 
     def get_mapping(self, original: str) -> str | None:
         """Get the replacement for an original text.

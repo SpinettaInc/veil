@@ -3,6 +3,7 @@
 Patterns inspired by Microsoft Presidio and common PII detection rules.
 """
 
+import ipaddress
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ class Pattern:
         validator: Optional function to validate matches
         context_patterns: Patterns that boost confidence when found nearby
         context_boost: Confidence added when a context pattern matches
+        trim_to_valid: Retry a match the validator rejects with trailing
+            groups removed (see the field comment)
         requires_context: Drop the match entirely unless a context pattern
             matches nearby. Use for loose patterns (any 8+ digit number, any
             5-digit number) that are only meaningful with a cue like
@@ -38,6 +41,10 @@ class Pattern:
     context_boost: float = 0.1
     requires_context: bool = False
     label: str | None = None  # user-facing type name for CUSTOM patterns
+    # When the validator rejects a match, retry with trailing
+    # whitespace-separated groups removed. For greedy patterns that can
+    # swallow the next word ("<IBAN> BIC", "<IBAN> EUR").
+    trim_to_valid: bool = False
 
 
 # Validation functions for specific patterns
@@ -104,6 +111,21 @@ def validate_iban(iban: str) -> bool:
     return int(numeric) % 97 == 1
 
 
+def validate_ipv6(candidate: str) -> bool:
+    """Whether the candidate is a real IPv6 address.
+
+    Needs a digit: "::" alone, or hex-looking identifiers around a scope
+    operator ("cafe::bad"), are not addresses anyone wrote down.
+    """
+    if not any(ch.isdigit() for ch in candidate):
+        return False
+    try:
+        ipaddress.IPv6Address(candidate)
+    except ValueError:
+        return False
+    return True
+
+
 def validate_phone(phone: str) -> bool:
     """Validate phone number has reasonable digit count."""
     digits = re.sub(r"\D", "", phone)
@@ -112,13 +134,25 @@ def validate_phone(phone: str) -> bool:
 
 # Pre-compiled regex patterns
 
+_SSN_CUES = [
+    re.compile(r"social\s*sec", re.IGNORECASE),
+    re.compile(r"\bSSN\b", re.IGNORECASE),
+]
+_PHONE_CUES = [
+    re.compile(
+        r"\b(?:phones?|tel|telephone|call(?:s|ed|ing)?|mobile|cell(?:phone)?|contact|fax)\b"
+        r"|連絡|電話",
+        re.IGNORECASE,
+    ),
+]
+
 PATTERNS: list[Pattern] = [
     # Email addresses
     Pattern(
         name="email",
         entity_type=EntityType.EMAIL,
         regex=re.compile(
-            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+            r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}\b",
             re.IGNORECASE,
         ),
         confidence=0.95,
@@ -129,15 +163,22 @@ PATTERNS: list[Pattern] = [
         name="ssn",
         entity_type=EntityType.SSN,
         regex=re.compile(
-            r"\b(?!000|666|9\d{2})\d{3}[-\s]?(?!00)\d{2}[-\s]?(?!0000)\d{4}\b"
+            r"\b(?!000|666|9\d{2})\d{3}[-\s](?!00)\d{2}[-\s](?!0000)\d{4}\b"
         ),
         confidence=0.85,
         validator=validate_ssn,
-        context_patterns=[
-            re.compile(r"social\s*security", re.IGNORECASE),
-            re.compile(r"\bSSN\b", re.IGNORECASE),
-            re.compile(r"social\s*sec", re.IGNORECASE),
-        ],
+        context_patterns=_SSN_CUES,
+    ),
+    # An unformatted nine-digit number is an order id far more often than an
+    # SSN, so it needs a cue nearby
+    Pattern(
+        name="ssn_unformatted",
+        entity_type=EntityType.SSN,
+        regex=re.compile(r"\b(?!000|666|9\d{2})\d{3}(?!00)\d{2}(?!0000)\d{4}\b"),
+        confidence=0.85,
+        validator=validate_ssn,
+        context_patterns=_SSN_CUES,
+        requires_context=True,
     ),
     # Credit Card Numbers (major providers)
     Pattern(
@@ -147,6 +188,9 @@ PATTERNS: list[Pattern] = [
             r"\b(?:"
             r"4[0-9]{12}(?:[0-9]{3})?|"  # Visa
             r"5[1-5][0-9]{14}|"  # Mastercard
+            r"2[2-7][0-9]{14}|"  # Mastercard 2-series
+            r"3(?:0[0-5]|[68][0-9])[0-9]{11}|"  # Diners Club
+            r"62[0-9]{14,17}|"  # UnionPay
             r"3[47][0-9]{13}|"  # Amex
             r"6(?:011|5[0-9]{2})[0-9]{12}|"  # Discover
             r"(?:2131|1800|35\d{3})\d{11}"  # JCB
@@ -188,10 +232,7 @@ PATTERNS: list[Pattern] = [
         ),
         confidence=0.8,
         validator=validate_phone,
-        context_patterns=[
-            re.compile(r"phone|tel|call|mobile|cell", re.IGNORECASE),
-            re.compile(r"contact", re.IGNORECASE),
-        ],
+        context_patterns=_PHONE_CUES,
     ),
     # International Phone Numbers (no separators)
     Pattern(
@@ -208,13 +249,13 @@ PATTERNS: list[Pattern] = [
         name="phone_international_formatted",
         entity_type=EntityType.PHONE,
         regex=re.compile(
-            r"\+[1-9][0-9]{0,2}[-.\s][0-9]{1,4}[-.\s][0-9]{2,4}[-.\s][0-9]{2,6}"
+            # two to five groups after the country code: "+44 7911 123456",
+            # "+81-90-1234-5678", "+49 30 1234 5678"
+            r"(?<![\w+])\+[1-9][0-9]{0,2}(?:[-.\s][0-9]{1,6}){2,5}\b"
         ),
         confidence=0.9,
         validator=validate_phone,
-        context_patterns=[
-            re.compile(r"phone|tel|call|mobile|cell|contact|fax", re.IGNORECASE),
-        ],
+        context_patterns=_PHONE_CUES,
     ),
     # Japanese mobile phones (090/080/070-XXXX-XXXX)
     Pattern(
@@ -245,9 +286,7 @@ PATTERNS: list[Pattern] = [
         ),
         confidence=0.7,
         validator=validate_phone,
-        context_patterns=[
-            re.compile(r"phone|tel|call|mobile|cell|contact|fax|連絡|電話", re.IGNORECASE),
-        ],
+        context_patterns=_PHONE_CUES,
         requires_context=True,
     ),
     # IPv4 Addresses
@@ -260,17 +299,20 @@ PATTERNS: list[Pattern] = [
         ),
         confidence=0.9,
     ),
-    # IPv6 Addresses (simplified)
+    # IPv6 addresses: a permissive candidate ("::" compression anywhere, or
+    # all eight groups), then the standard library decides
     Pattern(
         name="ip_address_v6",
         entity_type=EntityType.IP_ADDRESS,
         regex=re.compile(
-            r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|"
-            r"\b(?:[0-9a-fA-F]{1,4}:){1,7}:\b|"
-            r"\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b",
+            r"(?<![\w:.])(?:"
+            r"(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?"
+            r"|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}"
+            r")(?![\w:])",
             re.IGNORECASE,
         ),
         confidence=0.9,
+        validator=validate_ipv6,
     ),
     # URLs
     Pattern(
@@ -288,9 +330,11 @@ PATTERNS: list[Pattern] = [
         entity_type=EntityType.IBAN,
         regex=re.compile(
             r"\b[A-Z]{2}[0-9]{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b",
+            re.IGNORECASE,  # people type them in lower case; mod-97 keeps prose out
         ),
         confidence=0.9,
         validator=validate_iban,
+        trim_to_valid=True,
         context_patterns=[
             re.compile(r"IBAN|bank\s*account|account\s*number", re.IGNORECASE),
         ],
@@ -322,7 +366,7 @@ PATTERNS: list[Pattern] = [
     Pattern(
         name="medical_record",
         entity_type=EntityType.MEDICAL_RECORD,
-        regex=re.compile(r"\b(?:MRN|MR)[-:\s]?[0-9]{6,10}\b", re.IGNORECASE),
+        regex=re.compile(r"\b(?:MRN|MR)[-:#\s]{0,3}[0-9]{6,10}\b", re.IGNORECASE),
         confidence=0.9,
         context_patterns=[
             re.compile(r"medical\s*record|patient\s*id|MRN", re.IGNORECASE),
@@ -346,7 +390,7 @@ PATTERNS: list[Pattern] = [
         regex=re.compile(r"\b[0-9]{5}(?:-[0-9]{4})?\b"),
         confidence=0.6,
         context_patterns=[
-            re.compile(r"address|zip|postal|city|state", re.IGNORECASE),
+            re.compile(r"\b(?:address|zip|postal|city|state)\b", re.IGNORECASE),
         ],
         context_boost=0.2,
         requires_context=True,
@@ -382,7 +426,7 @@ PATTERNS: list[Pattern] = [
         regex=re.compile(r"\b[0-9]{8,17}\b"),
         confidence=0.4,  # Low confidence without context
         context_patterns=[
-            re.compile(r"account|bank|acct|routing|swift", re.IGNORECASE),
+            re.compile(r"\b(?:accounts?|bank(?:ing)?|acct|routing|swift)\b", re.IGNORECASE),
         ],
         context_boost=0.4,
         requires_context=True,
@@ -392,8 +436,10 @@ PATTERNS: list[Pattern] = [
         name="address_street",
         entity_type=EntityType.LOC,
         regex=re.compile(
-            r"\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}(?:St(?:reet)?|Ave(?:nue)?|Rd|Road|Blvd|Boulevard|Dr(?:ive)?|Ln|Lane|Way|Pl(?:ace)?|Ct|Court)\b",
-            re.IGNORECASE,
+            # Street names are capitalised; only the suffix is case-insensitive.
+            # With the whole pattern case-insensitive, "2 steps that way" is an address.
+            r"\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}"
+            r"(?i:St(?:reet)?|Ave(?:nue)?|Rd|Road|Blvd|Boulevard|Dr(?:ive)?|Ln|Lane|Way|Pl(?:ace)?|Ct|Court)\b",
         ),
         confidence=0.8,
         context_patterns=[
@@ -499,16 +545,25 @@ class PatternDetector:
         for pattern in self.patterns:
             for match in pattern.regex.finditer(text):
                 matched_text = match.group()
+                end = match.end()
 
                 # Skip if validator fails
                 if pattern.validator and not pattern.validator(matched_text):
-                    continue
+                    if not pattern.trim_to_valid:
+                        continue
+                    while re.search(r"\s", matched_text.strip()):
+                        matched_text = matched_text.rsplit(None, 1)[0]
+                        if pattern.validator(matched_text):
+                            break
+                    else:
+                        continue
+                    end = match.start() + len(matched_text)
 
                 # Calculate confidence with context boost
                 confidence = pattern.confidence
                 if pattern.context_patterns:
                     context_start = max(0, match.start() - self.context_window)
-                    context_end = min(len(text), match.end() + self.context_window)
+                    context_end = min(len(text), end + self.context_window)
                     context = context_text[context_start:context_end]
 
                     has_context = any(
@@ -523,10 +578,10 @@ class PatternDetector:
                     text=matched_text,
                     entity_type=pattern.entity_type,
                     start=match.start(),
-                    end=match.end(),
+                    end=end,
                     confidence=confidence,
                     source="pattern",
-                    context=self._get_context(text, match.start(), match.end()),
+                    context=self._get_context(text, match.start(), end),
                     metadata={"pattern_name": pattern.name, "label": pattern.label},
                 )
                 entities.append(entity)

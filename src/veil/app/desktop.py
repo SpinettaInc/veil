@@ -4,6 +4,7 @@ A Gradio-based desktop application for chatting with LLMs while
 automatically protecting sensitive information.
 """
 
+import inspect
 import warnings
 from collections.abc import Generator
 from typing import Any, cast
@@ -23,6 +24,12 @@ from veil.llm.providers.base import LLMConfig, Message  # noqa: E402
 from veil.llm.providers.ollama import OllamaProvider  # noqa: E402
 from veil.llm.providers.openai import OPENAI_AVAILABLE, OpenAIProvider  # noqa: E402
 from veil.llm.proxy import VeilProxy  # noqa: E402
+
+# Chat history is a list of {"role", "content"} dicts. Gradio 4.44-5.x needs
+# that requested explicitly; 6.x removed the parameter and always uses it.
+_CHATBOT_MESSAGES: dict[str, Any] = (
+    {"type": "messages"} if "type" in inspect.signature(gr.Chatbot.__init__).parameters else {}
+)
 
 # Provider options
 PROVIDERS: dict[str, dict[str, Any]] = {
@@ -61,7 +68,6 @@ MODELS = {
 
 # Global state
 current_proxy: VeilProxy | None = None
-conversation_history: list[Message] = []
 
 
 def create_proxy(settings: AppSettings) -> VeilProxy | None:
@@ -107,14 +113,18 @@ def create_proxy(settings: AppSettings) -> VeilProxy | None:
 
 def chat_response(
     message: str,
-    history: list[list[str]],
+    history: list[Any] | None = None,
 ) -> tuple[str, str, str, int]:
     """Process a chat message through Veil.
+
+    ``history`` (what the chat widget displays) is not sent anywhere: the
+    proxy keeps the conversation itself, already anonymized. The displayed
+    turns hold reconstructed text and error banners, neither of which
+    belongs in a request to the provider.
 
     Returns:
         Tuple of (response, anonymized_input, raw_response, entity_count)
     """
-    global current_proxy, conversation_history
 
     if not current_proxy:
         return (
@@ -128,16 +138,7 @@ def chat_response(
         return "", "", "", 0
 
     try:
-        # Build conversation history from Gradio history
-        conv_history = []
-        for user_msg, assistant_msg in history:
-            if user_msg:
-                conv_history.append(Message(role="user", content=user_msg))
-            if assistant_msg:
-                conv_history.append(Message(role="assistant", content=assistant_msg))
-
-        # Send through proxy
-        response = current_proxy.chat(message, conversation_history=conv_history)
+        response = current_proxy.chat(message)
 
         return (
             response.reconstructed_response,
@@ -152,9 +153,9 @@ def chat_response(
 
 def chat_interface(
     message: str,
-    history: list[list[str]],
-) -> Generator[tuple[list[list[str]], str, str, str], None, None]:
-    """Gradio chat interface handler with streaming display."""
+    history: list[Any],
+) -> Generator[tuple[list[Any], str, str, str], None, None]:
+    """Gradio chat interface handler."""
     if not message.strip():
         yield history, "", "", ""
         return
@@ -168,7 +169,10 @@ def chat_interface(
         info = "✅ No sensitive data detected"
 
     # Update history
-    history = history + [[message, response]]
+    history = list(history or []) + [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": response},
+    ]
 
     yield history, info, anon_input, raw_resp
 
@@ -230,9 +234,6 @@ def update_models(provider: str) -> gr.Dropdown:
 
 def clear_chat() -> tuple[list[Any], str, str, str]:
     """Clear chat history and session."""
-    global conversation_history
-    conversation_history = []
-
     if current_proxy:
         current_proxy.clear_session()
 
@@ -332,6 +333,7 @@ def create_app() -> gr.Blocks:
                         chatbot = gr.Chatbot(
                             label="Conversation",
                             height=500,
+                            **_CHATBOT_MESSAGES,
                         )
 
                         with gr.Row():

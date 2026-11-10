@@ -230,7 +230,7 @@ class SemanticReplacer:
             Semantic replacement string
         """
         # Check if we already have a mapping for this text
-        existing = mapping_store.get_replacement(entity.text)
+        existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
         if existing:
             return existing
 
@@ -327,11 +327,12 @@ class SemanticReplacer:
             return replacement
 
         # Pool exhausted, generate numbered replacement
-        count = len([
-            u for u in self._used_replacements
-            if u.startswith(entity_type.value.title())
-        ])
-        return f"{entity_type.value.title()}_{count + 1}"
+        # (recorded as used, so the next entity of this type gets the next number)
+        prefix = f"{entity_type.value.title()}_"
+        count = sum(1 for u in self._used_replacements if u.startswith(prefix))
+        replacement = f"{prefix}{count + 1}"
+        self._used_replacements.add(replacement)
+        return replacement
 
     def get_context_aware_replacement(
         self,
@@ -353,7 +354,7 @@ class SemanticReplacer:
             Context-aware replacement
         """
         # Check existing mapping
-        existing = mapping_store.get_replacement(entity.text)
+        existing = mapping_store.get_replacement_for(entity.text, entity.entity_type)
         if existing:
             return existing
 

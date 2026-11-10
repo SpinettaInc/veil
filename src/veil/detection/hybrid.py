@@ -114,8 +114,15 @@ class HybridDetector:
         self.presidio_detector: PresidioDetector | None = None
         self.pattern_detector: PatternDetector | None = None
 
+        # Requested backends that could not be loaded. EntityDetector turns
+        # these into DetectionUnavailableError (strict) or a degraded flag.
+        self.unavailable: list[str] = []
+
         # spaCy
-        if self.spacy_config.enabled and SPACY_AVAILABLE:
+        if self.spacy_config.enabled and not SPACY_AVAILABLE:
+            self._mark_unavailable("spaCy is not installed; NER disabled")
+            self.spacy_config.enabled = False
+        if self.spacy_config.enabled:
             try:
                 self.spacy_detector = SpacyNER(
                     model_name=spacy_model,
@@ -124,7 +131,7 @@ class HybridDetector:
                     full_pipeline=self.presidio_config.enabled and PRESIDIO_AVAILABLE,
                 )
             except OSError as e:
-                print(f"Warning: Could not load spaCy: {e}")
+                self._mark_unavailable(f"Could not load spaCy model: {e}")
                 self.spacy_config.enabled = False
 
         # Presidio
@@ -141,7 +148,7 @@ class HybridDetector:
                     model_name=shared.model_name if shared else "en_core_web_lg",
                 )
             except Exception as e:
-                print(f"Warning: Could not load Presidio: {e}")
+                self._mark_unavailable(f"Could not load Presidio: {e}")
                 self.presidio_config.enabled = False
 
         # Patterns
@@ -155,6 +162,10 @@ class HybridDetector:
             self.pattern_detector,
         ]):
             raise ValueError("No detection methods available")
+
+    def _mark_unavailable(self, reason: str) -> None:
+        print(f"Warning: {reason}")
+        self.unavailable.append(reason)
 
     def detect(self, text: str) -> list[Entity]:
         """Detect entities using all enabled detectors.

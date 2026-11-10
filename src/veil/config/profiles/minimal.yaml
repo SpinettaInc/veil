@@ -42,23 +42,6 @@ entity_weights:
   LICENSE_PLATE: 0.85
   CUSTOM: 0.5
   UNKNOWN: 0.3
-pos_multipliers:
-  PROPN: 1.2
-  NOUN: 1.0
-  NUM: 0.8
-  ADJ: 0.6
-  VERB: 0.3
-  ADV: 0.3
-  ADP: 0.1
-  AUX: 0.1
-  CCONJ: 0.1
-  DET: 0.1
-  PART: 0.1
-  PRON: 0.2
-  SCONJ: 0.1
-  PUNCT: 0.0
-  SYM: 0.2
-  X: 0.3
 context_patterns:
 - pattern: \b(?:CEO|CTO|CFO|COO|President|Chairman)\s+(?:of\s+)?
   boost: 0.15
@@ -78,7 +61,7 @@ context_patterns:
 - pattern: \bhealth\s+(?:insurance|plan|condition)
   boost: 0.15
   description: Health-related context
-- pattern: \baccount\s*(?:number|#|no\.?)?
+- pattern: \baccounts?\b\s*(?:number|#|no\.?)?
   boost: 0.2
   description: Account number context
 - pattern: \bsocial\s*security

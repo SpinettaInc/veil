@@ -25,7 +25,6 @@ class TestWeightConfig:
         assert config.threshold == 0.5
         assert config.rarity_factor == 0.1
         assert len(config.entity_weights) > 0
-        assert len(config.pos_multipliers) > 0
         assert len(config.context_patterns) > 0
 
     def test_person_weight(self):
@@ -41,14 +40,6 @@ class TestWeightConfig:
         weight = config.get_entity_weight(EntityType.SSN)
 
         assert weight == 1.0
-
-    def test_pos_multipliers(self):
-        """Test POS multipliers are set correctly."""
-        config = WeightConfig()
-
-        assert config.get_pos_multiplier("PROPN") > 1.0
-        assert config.get_pos_multiplier("VERB") < 1.0
-        assert config.get_pos_multiplier("UNKNOWN") == 1.0  # Default
 
     def test_get_profile_paranoid(self):
         """Test paranoid profile has lower threshold."""
